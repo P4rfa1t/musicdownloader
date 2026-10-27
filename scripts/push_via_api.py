@@ -69,20 +69,47 @@ def main() -> int:
         return 0
 
     full_message = git("log", "-1", "--format=%B", local_head).rstrip()
-    changed = git("diff", "--name-status", remote_main, local_head).strip().splitlines()
-    if not changed:
-        print("没有文件差异（可能只是 tag 需要移动）")
-    print(f"待同步 {len(changed)} 个文件")
+
+    # 远端那个提交不一定在本地仓库里（它是 API 造出来的），所以不能 git diff。
+    # 改成两边各取一份 path->blob sha 的映射来比。
+    base_tree = client.get(f"{API}/git/commits/{remote_main}").json()["tree"]["sha"]
+    remote_tree = client.get(f"{API}/git/trees/{base_tree}", params={"recursive": "1"})
+    remote_tree.raise_for_status()
+    remote_blobs = {
+        item["path"]: item["sha"] for item in remote_tree.json()["tree"] if item["type"] == "blob"
+    }
+
+    local_blobs = {}
+    for entry in git("ls-tree", "-r", "-z", local_head).split("\0"):
+        if not entry.strip():
+            continue
+        meta, path = entry.split("\t", 1)
+        _mode, _type, sha = meta.split()
+        local_blobs[path] = sha
+
+    changed = []
+    for path, sha in local_blobs.items():
+        if remote_blobs.get(path) != sha:
+            changed.append(path)
+    deleted = [path for path in remote_blobs if path not in local_blobs]
+    print(f"待同步 {len(changed)} 个文件，删除 {len(deleted)} 个")
+    if not changed and not deleted:
+        print("没有文件差异，无需推送")
+        return 0
 
     tree_items = []
-    for line in changed:
-        parts = line.split("\t")
-        status, path = parts[0], parts[-1]
-        if status.startswith("D"):
-            # sha=null 表示从 tree 里删掉这个路径
-            tree_items.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
-            continue
-        raw = (ROOT / path).read_bytes()
+    for path in deleted:
+        # sha=null 表示从 tree 里删掉这个路径
+        tree_items.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
+    for path in changed:
+        # 从 git 对象库取内容，而不是读工作区：autocrlf 下工作区是 CRLF，
+        # 读工作区会把 CRLF 写进仓库，产生无意义的整文件差异
+        raw = subprocess.run(
+            ["git", "cat-file", "blob", local_blobs[path]],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+        ).stdout
         blob = client.post(
             f"{API}/git/blobs",
             json={"content": base64.b64encode(raw).decode(), "encoding": "base64"},
@@ -91,7 +118,6 @@ def main() -> int:
         tree_items.append({"path": path, "mode": "100644", "type": "blob", "sha": blob.json()["sha"]})
         print("  blob", path, len(raw), "B")
 
-    base_tree = client.get(f"{API}/git/commits/{remote_main}").json()["tree"]["sha"]
     tree = client.post(f"{API}/git/trees", json={"base_tree": base_tree, "tree": tree_items})
     tree.raise_for_status()
 

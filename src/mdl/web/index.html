@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>MusicDL · 本地音乐下载器</title>
-  <!-- 相对路径：GitHub Pages 部署在 /musicdownloader/ 子路径下，绝对路径会 404 -->
   <link rel="stylesheet" href="./app.css" />
+  <link rel="stylesheet" href="./account.css" />
 </head>
 <body>
   <div class="app">
@@ -26,6 +26,10 @@
       <div class="providers" id="providers" aria-label="平台状态"></div>
 
       <div class="topbar-right">
+        <button class="ghost-btn" id="accountBtn" type="button" aria-haspopup="dialog" title="登录平台账号，读取歌单">
+          <span aria-hidden="true">☺</span>
+          <span>账号</span>
+        </button>
         <button class="ghost-btn settings-btn" id="settingsBtn" type="button" aria-haspopup="dialog">
           <span class="gear" aria-hidden="true">⚙</span>
           <span class="settings-label">设置</span>
@@ -115,8 +119,9 @@
         <div class="conn-result" id="connResult" hidden></div>
 
         <p class="modal-note">
-          不填也能用：页面会走<b>纯前端直连模式</b>，靠 JSONP 搜索 QQ / 酷狗 / 酷我，其中酷狗可以直接下载。<br />
-          想要<span>网易云</span>、FLAC、封面歌词标签，或酷我的完整曲目，就需要一个后端：① 本地跑 <code>mdl serve</code>（同源，留空即可）；② 部署 <code>worker/</code> 里的 Cloudflare 中继（见 README）。
+          正常不用改：页面由 <code>mdl serve</code> 自己托管，留空就是同源。<br />
+          只有当前端和 <code>mdl serve</code> 不在同一个地址时（换了端口、跑了反向代理、连另一台机器上的服务）才需要填。<br />
+          想要平台账号的高音质与歌单，用右上角「账号」登录，跟这里无关。
         </p>
       </div>
 
@@ -132,7 +137,7 @@
   <div class="backdrop" id="backdrop" hidden></div>
   <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
-  <script src="./direct.js"></script>
+  <script src="./account.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

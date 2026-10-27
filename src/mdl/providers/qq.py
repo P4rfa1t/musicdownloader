@@ -11,8 +11,8 @@ import base64
 import re
 from typing import Any
 
-from ..models import ResolveResult, StreamInfo, Track
-from .base import Provider, StreamUnavailable, strip_tags
+from ..models import AccountInfo, Playlist, ResolveResult, StreamInfo, Track
+from .base import AccountError, Provider, StreamUnavailable, strip_tags
 
 MUSICU = "https://u.y.qq.com/cgi-bin/musicu.fcg"
 SMARTBOX = "https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg"
@@ -32,21 +32,48 @@ class QQProvider(Provider):
     name = "qq"
     referer = REFERER
 
+    # QQ 的登录只能在浏览器里完成（微信/QQ 扫码都走 y.qq.com 的私有流程），
+    # 所以这里只提供粘贴 Cookie 一种方式。
+    label = "QQ音乐"
+    login_modes = ("cookie",)
+    playlists_supported = True
+    account_note = "需要在浏览器登录 y.qq.com 后，把 Cookie 整段复制过来（必须含 uin 与 qm_keyst）"
+
     # ---------- 底层调用 ----------
 
-    async def _call(self, req: dict[str, Any], ct: str = "24", cv: str = "0") -> dict[str, Any]:
-        payload = {"comm": {"ct": ct, "cv": cv, "uin": "0"}, **req}
-        data = await self.http.post_json(
-            MUSICU,
-            payload,
-            headers=self.headers(
-                {
-                    "Content-Type": "application/json;charset=UTF-8",
-                    "Origin": "https://y.qq.com",
-                }
-            ),
+    async def _call(
+        self,
+        req: dict[str, Any],
+        ct: str = "24",
+        cv: str = "0",
+        cookie: str = "",
+        uin: str = "0",
+    ) -> dict[str, Any]:
+        payload = {"comm": {"ct": ct, "cv": cv, "uin": uin}, **req}
+        headers = self.headers_with(
+            cookie,
+            {
+                "Content-Type": "application/json;charset=UTF-8",
+                "Origin": "https://y.qq.com",
+            },
         )
+        data = await self.http.post_json(MUSICU, payload, headers=headers)
         return data or {}
+
+    @staticmethod
+    def _uin_of(cookie: str) -> str:
+        """从 Cookie 里抠出 QQ 号（uin 可能是 o0123456789 这种带前缀的形式）。
+
+        也接受「只填 QQ 号」这种简化输入——公开歌单本来就不需要 Cookie。
+        """
+        raw = (cookie or "").strip()
+        if raw.isdigit():
+            return raw
+        for key in ("uin", "p_uin", "wxuin"):
+            m = re.search(rf"(?:^|;\s*){key}=o?0*(\d+)", cookie or "")
+            if m:
+                return m.group(1)
+        return ""
 
     # ---------- 搜索 ----------
 
@@ -225,6 +252,114 @@ class QQProvider(Provider):
             return base64.b64decode(raw).decode("utf-8", "replace")
         except Exception:
             return ""
+
+    # ---------- 账号 ----------
+
+    async def account_info(self, cookie: str) -> AccountInfo:
+        """QQ 的「我是谁」只能从 Cookie 里的 uin 推，没有可校验的接口。
+
+        GetPlaylistByUin 对任意 uin 都匿名可读（公开数据），所以这里不谎报"已验证"，
+        只要能从凭据里拿到 uin 就算可用，昵称先用 QQ 号占位。
+        """
+        uin = self._uin_of(cookie)
+        if not uin:
+            return AccountInfo(provider=self.name, logged_in=False)
+        return AccountInfo(
+            provider=self.name,
+            logged_in=True,
+            nickname=f"QQ {uin}",
+            uid=uin,
+            vip=False,
+        )
+
+    async def user_playlists(self, cookie: str) -> list[Playlist]:
+        """账号歌单。需要 uin + 整段 Cookie（QQ 把凭据塞在 param.cookie 里）。"""
+        uin = self._uin_of(cookie)
+        if not cookie or not uin:
+            raise AccountError(self.name, "Cookie 里找不到 uin，请复制完整的 Cookie")
+        data = await self._call(
+            {
+                "req": {
+                    "module": "music.musicasset.PlaylistBaseRead",
+                    "method": "GetPlaylistByUin",
+                    "param": {"uin": uin, "cookie": cookie},
+                }
+            },
+            ct="19",
+            cv="1859",
+            cookie=cookie,
+            uin=uin,
+        )
+        req = data.get("req") or {}
+        code = int(req.get("code") or 0)
+        if code != 0:
+            raise AccountError(self.name, f"读取歌单失败（code {code}），Cookie 可能已过期")
+        body = req.get("data") or {}
+        items = body.get("v_playlist") or body.get("playlist") or []
+        out: list[Playlist] = []
+        for it in items:
+            tid = it.get("tid") or it.get("dissid") or it.get("dirId")
+            if not tid:
+                continue
+            cover = it.get("picUrl") or it.get("dissPic") or it.get("cover") or ""
+            if cover.startswith("http://"):
+                cover = "https://" + cover[7:]
+            out.append(
+                Playlist(
+                    provider=self.name,
+                    id=str(tid),
+                    name=strip_tags(it.get("dirName") or it.get("dissname") or it.get("name") or ""),
+                    track_count=int(it.get("songNum") or it.get("songnum") or it.get("song_count") or 0),
+                    cover_url=cover,
+                    creator=strip_tags(it.get("nick") or it.get("creator") or ""),
+                )
+            )
+        return out
+
+    async def playlist_tracks(
+        self, playlist_id: str, cookie: str = ""
+    ) -> tuple[str, list[Track]]:
+        """歌单曲目走 CgiGetDiss，匿名可用（公开歌单）。大歌单按页取。"""
+        uin = self._uin_of(cookie) or "0"
+        tracks: list[Track] = []
+        title = ""
+        total = 0
+        page = 0
+        while page < 10:  # 上限 10 页 × 100 = 1000 首，够用且不会无限循环
+            data = await self._call(
+                {
+                    "req": {
+                        "module": "music.srfDissInfo.DissInfo",
+                        "method": "CgiGetDiss",
+                        "param": {
+                            "disstid": int(playlist_id),
+                            "song_begin": page * 100,
+                            "song_num": 100,
+                            "userinfo": 1,
+                            "tag": 1,
+                            "orderlist": 1,
+                        },
+                    }
+                },
+                ct="19",
+                cv="1859",
+                cookie=cookie,
+                uin=uin,
+            )
+            req = data.get("req") or {}
+            body = req.get("data") or {}
+            dirinfo = body.get("dirinfo") or {}
+            title = title or strip_tags(dirinfo.get("title", ""))
+            total = int(body.get("total_song_num") or 0)
+            page_songs = body.get("songlist") or []
+            for s in page_songs:
+                tracks.append(self._track_from_item(s))
+            if len(page_songs) < 100 or (total and len(tracks) >= total):
+                break
+            page += 1
+        if not tracks:
+            raise AccountError(self.name, "歌单为空、不存在，或需要登录（私密歌单）")
+        return title or f"歌单 {playlist_id}", tracks
 
     # ---------- 链接解析 ----------
 

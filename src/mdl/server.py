@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,12 +15,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__
+from .accounts import AccountStore, StoreError
 from .config import cors_origins, settings
 from .downloader import Downloader, JobManager
 from .http import Http, HttpError
-from .models import QUALITIES, Track
+from .models import QUALITIES, AccountInfo, Track
 from .providers import ALL_PROVIDERS, Registry
-from .providers.base import StreamUnavailable
+from .providers.base import AccountError, StreamUnavailable
 
 log = logging.getLogger("mdl.server")
 
@@ -34,6 +36,7 @@ class AppState:
     registry: Registry
     downloader: Downloader
     jobs: JobManager
+    accounts: AccountStore
 
 
 state = AppState()
@@ -46,13 +49,20 @@ async def lifespan(app: FastAPI):
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    http = Http(settings.cookies)
+    # 先把面板里存过的 Cookie 叠到配置之上，再建 Http，这样首个请求就带登录态
+    store = AccountStore()
+    base_cookies = dict(settings.cookies)
+    base_cookies.update(store.all())
+    http = Http(base_cookies)
     await http.open()
+    state.accounts = store
     state.http = http
     state.registry = Registry(http)
     state.downloader = Downloader(state.registry, http)
     state.jobs = JobManager(state.downloader)
     log.info("MusicDL 就绪，下载目录 %s", Path(settings.download_dir).resolve())
+    if store.all():
+        log.info("已载入账号凭据：%s", ", ".join(sorted(store.all())))
     try:
         yield
     finally:
@@ -62,16 +72,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="MusicDL", version=__version__, lifespan=lifespan)
 
-# GitHub Pages 上的静态前端要跨域调这里，所以放开 CORS。
-# 只影响浏览器读响应的权限，不涉及鉴权（本项目本身是本地单用户工具）。
+# 前端现在由本服务直接托管，跨域只留给本机其他端口的预览 / 调试。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(),
-    # 任意 github.io 子域（含项目页）+ 本机任意端口的静态预览
-    allow_origin_regex=(
-        r"https://[a-zA-Z0-9-]+\.github\.io"
-        r"|https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?"
-    ),
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?",
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -120,6 +125,12 @@ class BatchBody(BaseModel):
     tracks: list[TrackBody] = Field(..., min_length=1, max_length=200)
 
 
+class LoginBody(BaseModel):
+    """平台名走路径参数，请求体只放凭据。"""
+
+    cookie: str = Field("", description="整条 Cookie；QQ 可以直接填 QQ 号")
+
+
 # ------------------------------------------------------------------ 基础接口
 
 
@@ -129,6 +140,8 @@ async def health() -> dict[str, Any]:
         "ok": True,
         "version": __version__,
         "providers": state.registry.names() if hasattr(state, "registry") else ALL_PROVIDERS,
+        # 平台显示名也一起给，前端不用自己维护一份 id → 中文的映射
+        "provider_labels": _provider_labels(),
         "download_dir": str(Path(settings.download_dir).resolve()),
     }
 
@@ -136,6 +149,263 @@ async def health() -> dict[str, Any]:
 @app.get("/api/qualities")
 async def qualities() -> dict[str, Any]:
     return {"qualities": QUALITIES, "default": "320"}
+
+
+# ------------------------------------------------------------------ 账号
+
+
+# 前端 account.js 是围绕这套契约写的，字段名照抄不要改：
+#   GET    /api/accounts                       -> {ok, accounts:[...]}
+#   POST   /api/accounts/{provider} {cookie}   -> {ok, account}
+#   DELETE /api/accounts/{provider}            -> {ok}
+#   POST   /api/accounts/{provider}/qr         -> {ok, key, qr_image, expires_in}
+#   GET    /api/accounts/{provider}/qr/{key}   -> {ok, status, message, account?}
+#   GET    /api/accounts/{provider}/playlists  -> {ok, playlists:[...], note}
+#   GET    /api/playlists/{provider}/{id}      -> {ok, title, tracks:[...]}
+
+QR_STATUSES = ("wait", "scanned", "ok", "expired", "error")
+
+
+def _provider_or_400(provider: str):
+    if provider not in state.registry.providers:
+        raise HTTPException(status_code=400, detail=f"不支持的平台: {provider}")
+    return state.registry.get(provider)
+
+
+def _provider_labels() -> dict[str, str]:
+    labels: dict[str, str] = {}
+    names = state.registry.names() if hasattr(state, "registry") else ALL_PROVIDERS
+    for name in names:
+        try:
+            prov = state.registry.get(name)
+        except Exception:  # noqa: BLE001 - 缺一个平台不影响 /api/health
+            continue
+        labels[name] = getattr(prov, "label", "") or name
+    return labels
+
+
+def _account_payload(provider: str, info, cookie: str) -> dict[str, Any]:
+    """把 provider 的身份信息 + 面板需要的静态能力拼成前端认识的那张卡。"""
+    prov = state.registry.get(provider)
+    payload: dict[str, Any] = {
+        "provider": provider,
+        "name": getattr(prov, "label", provider),
+        "has_cookie": bool(cookie),
+        "logged_in": False,
+        "nickname": None,
+        "avatar": None,
+        "uid": "",
+        "vip": False,
+        "level": "",
+        "login_mode": "qr" if "qr" in getattr(prov, "login_modes", ("cookie",)) else "cookie",
+        "playlists_supported": bool(getattr(prov, "playlists_supported", False)),
+        "note": getattr(prov, "account_note", "") or None,
+    }
+    if info is not None:
+        payload.update(
+            {
+                "logged_in": bool(info.logged_in),
+                "nickname": info.nickname or None,
+                "avatar": info.avatar or None,
+                "uid": info.uid or "",
+                "vip": bool(info.vip),
+                "level": info.level or "",
+            }
+        )
+    return payload
+
+
+async def _probe(provider: str, cookie: str, fallback: str = "") -> dict[str, Any]:
+    """用 cookie 问平台「我是谁」。平台抽风时降级成「有 Cookie 但身份未验证」。"""
+    prov = state.registry.get(provider)
+    if not cookie:
+        return _account_payload(provider, None, "")
+    try:
+        info = await prov.account_info(cookie)
+    except PROVIDER_ERRORS as exc:
+        log.warning("账号校验失败 %s: %s", provider, exc)
+        return _account_payload(provider, None, cookie)
+    except Exception as exc:  # noqa: BLE001 - 面板不能因为一个平台挂掉就整页报错
+        log.exception("账号校验异常 %s", provider)
+        return _account_payload(provider, None, cookie)
+    if info is None:
+        # 平台不支持验证身份，但有凭据就认（fallback 是已存 Cookie 的场景）
+        return _account_payload(provider, None, cookie or fallback)
+    return _account_payload(provider, info, cookie)
+
+
+def _remember(provider: str, cookie: str) -> None:
+    """存凭据并让共享 client 立刻带上它；目录不可写时给可读的 400 而不是 500。"""
+    try:
+        state.accounts.set(provider, cookie)
+    except StoreError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{exc}。把 MDL_ACCOUNT_FILE 指到一个可写路径即可（凭据不会上传到别处）",
+        ) from exc
+    state.http.set_cookie(provider, cookie)
+
+
+def _cookie_for(provider: str) -> str:
+    """账号优先：面板里存过的 Cookie 覆盖配置/环境变量里的初始值。"""
+    return state.accounts.get(provider) or settings.cookie_for(provider)
+
+
+@app.get("/api/accounts")
+async def list_accounts() -> dict[str, Any]:
+    """四个平台各自的身份状态，前端一次拿全。"""
+    accounts = []
+    for name in state.registry.names():
+        stored = state.accounts.get(name)
+        card = await _probe(name, stored or settings.cookie_for(name))
+        # has_cookie 问的是「用户存过凭据吗」，不是「请求带不带匿名 Cookie」
+        # （网易云/酷狗的匿名请求本来就带 os=pc 这类默认 Cookie）
+        card["has_cookie"] = bool(stored)
+        accounts.append(card)
+    return {"ok": True, "accounts": accounts}
+
+
+@app.post("/api/accounts/{provider}")
+async def save_account(provider: str, body: LoginBody) -> dict[str, Any]:
+    """保存粘贴的 Cookie。必须真能问出身份才算成功，否则让用户知道它没用。"""
+    prov = _provider_or_400(provider)
+    cookie = (body.cookie or "").strip()
+    if not cookie:
+        raise HTTPException(status_code=400, detail="Cookie 不能为空")
+    try:
+        info = await prov.account_info(cookie)
+    except AccountError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PROVIDER_ERRORS as exc:
+        raise HTTPException(status_code=400, detail=f"Cookie 无效：{exc}") from exc
+    if info is None or not info.logged_in:
+        # 平台能存但验不出身份：照样存下去（可能只是接口抽风），但如实回报
+        _remember(provider, cookie)
+        return {"ok": True, "account": _account_payload(provider, info, cookie)}
+    _remember(provider, cookie)
+    return {"ok": True, "account": _account_payload(provider, info, cookie)}
+
+
+@app.delete("/api/accounts/{provider}")
+async def delete_account(provider: str) -> dict[str, Any]:
+    _provider_or_400(provider)
+    try:
+        state.accounts.clear(provider)
+    except StoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    state.http.set_cookie(provider, settings.cookie_for(provider))
+    return {"ok": True}
+
+
+@app.post("/api/accounts/{provider}/qr")
+async def account_qr_start(provider: str) -> dict[str, Any]:
+    prov = _provider_or_400(provider)
+    modes = getattr(prov, "login_modes", ("cookie",))
+    if "qr" not in modes:
+        raise HTTPException(status_code=400, detail=f"{provider} 不支持扫码登录，请粘贴 Cookie")
+    try:
+        data = await prov.qr_start()
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PROVIDER_ERRORS as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"ok": True, **data}
+
+
+@app.get("/api/accounts/{provider}/qr/{key}")
+async def account_qr_poll(provider: str, key: str) -> dict[str, Any]:
+    prov = _provider_or_400(provider)
+    if "qr" not in getattr(prov, "login_modes", ("cookie",)):
+        raise HTTPException(status_code=400, detail=f"{provider} 不支持扫码登录")
+    try:
+        result = await prov.qr_poll(key)
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except AccountError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PROVIDER_ERRORS as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    status = str(result.get("status") or "wait")
+    if status not in QR_STATUSES:
+        status = "wait"
+    payload: dict[str, Any] = {
+        "ok": True,
+        "status": status,
+        "message": result.get("message") or "",
+    }
+    if status == "ok":
+        cookie = (result.get("cookie") or "").strip()
+        if cookie:
+            try:
+                state.accounts.set(provider, cookie)
+            except StoreError as exc:
+                # 落盘失败不该让「登录成功」当场变成失败：内存里已经存住了，
+                # 这次会话照样能用，只是重启后要重扫
+                log.warning("扫码登录凭据落盘失败，仅保留在内存：%s", exc)
+            state.http.set_cookie(provider, cookie)
+        account = result.get("account")
+        if account:
+            fields = {f.name for f in dataclasses.fields(AccountInfo)}
+            payload["account"] = _account_payload(
+                provider,
+                AccountInfo(
+                    **{k: v for k, v in account.items() if k in fields and k != "provider"},
+                    provider=provider,
+                ),
+                cookie,
+            )
+        else:
+            payload["account"] = await _probe(provider, cookie)
+    return payload
+
+
+@app.get("/api/accounts/{provider}/playlists")
+async def account_playlists(provider: str) -> dict[str, Any]:
+    prov = _provider_or_400(provider)
+    cookie = _cookie_for(provider)
+    note = getattr(prov, "account_note", "") or ""
+    if not getattr(prov, "playlists_supported", False):
+        return {"ok": True, "playlists": [], "note": note or "该平台暂不支持读取账号歌单"}
+    try:
+        playlists = await prov.user_playlists(cookie)
+    except AccountError as exc:
+        return {"ok": True, "playlists": [], "note": str(exc)}
+    except PROVIDER_ERRORS as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "playlists": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "track_count": p.track_count,
+                "cover": p.cover_url,
+                "creator": p.creator,
+            }
+            for p in playlists
+        ],
+        "note": note,
+    }
+
+
+@app.get("/api/playlists/{provider}/{playlist_id}")
+async def playlist_tracks(provider: str, playlist_id: str) -> dict[str, Any]:
+    prov = _provider_or_400(provider)
+    try:
+        title, tracks = await prov.playlist_tracks(playlist_id, _cookie_for(provider))
+    except AccountError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PROVIDER_ERRORS as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "provider": provider,
+        "id": playlist_id,
+        "title": title,
+        "total": len(tracks),
+        "tracks": [t.to_dict() for t in tracks],
+    }
 
 
 # ------------------------------------------------------------------ 搜索
@@ -280,8 +550,8 @@ async def _stream_unavailable(_request, exc: StreamUnavailable) -> JSONResponse:
 
 
 if WEB_DIR.is_dir():
-    # 前端用相对路径引用资源（./app.css、./app.js），这样同一份文件既能挂在
-    # 本服务的根路径，也能直接丢给 GitHub Pages 的子路径托管。
+    # 前端资源全部用相对路径引用（./app.css、./app.js），所以同一份文件既能挂
+    # 在本服务根路径，也能塞进任何子路径下托管。
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
     @app.get("/")
@@ -300,9 +570,13 @@ if WEB_DIR.is_dir():
     async def app_js() -> FileResponse:
         return FileResponse(WEB_DIR / "app.js", media_type="text/javascript")
 
-    @app.get("/direct.js")
-    async def direct_js() -> FileResponse:
-        return FileResponse(WEB_DIR / "direct.js", media_type="text/javascript")
+    @app.get("/account.js")
+    async def account_js() -> FileResponse:
+        return FileResponse(WEB_DIR / "account.js", media_type="text/javascript")
+
+    @app.get("/account.css")
+    async def account_css() -> FileResponse:
+        return FileResponse(WEB_DIR / "account.css", media_type="text/css")
 
     @app.get("/favicon.ico")
     async def favicon() -> Response:

@@ -274,9 +274,7 @@
     pollers: {},
     seq: 0,
     ctrl: null,
-    statusToken: 0,
-    // 纯前端直连模式：没有后端地址时启用，走 JSONP + CDN
-    direct: false
+    statusToken: 0
   };
 
   /* ------------------------------ 顶部平台状态 ------------------------------ */
@@ -338,68 +336,18 @@
   function loadHealth() {
     renderProviderSkeleton();
 
-    // 没有显式配置后端地址时，先探一下同源有没有 /api（本地 mdl serve 就有），
-    // 探不到再退回纯前端直连模式。这样本地预览 Pages 产物也能正常用。
-    if (!API_BASE) {
-      return api('/api/health', { silent: true }).then(function (data) {
-        state.direct = false;
-        applyHealth(data);
-        hideConnectGuide();
-        return data;
-      }).catch(function () {
-        if (!window.MDLDirect) {
-          applyHealth({ providers: [] });
-          showConnectGuide(new Error('还没有配置后端地址'));
-          return null;
-        }
-        state.direct = true;
-        applyDirectHealth();
-        hideConnectGuide();
-        return null;
-      });
-    }
-
-    state.direct = false;
-    return api('/api/health').then(function (data) {
+    // 前端现在由后端自己托管，正常情况同源一发即中；
+    // 连不上只有一种解释：服务没起（或 ?api= 指错了地址），如实报出来。
+    return api('/api/health', { silent: true }).then(function (data) {
       applyHealth(data);
       hideConnectGuide();
       return data;
     }).catch(function (err) {
-      // 配了地址但连不上：如果直连模块在，也先让用户能用
-      if (window.MDLDirect) {
-        state.direct = true;
-        applyDirectHealth();
-        toast('后端连不上（' + err.message + '），已切到纯前端直连模式', 'warn');
-        return null;
-      }
       applyHealth({ providers: [] });
-      toast('无法连接后端服务：' + err.message, 'error');
       showConnectGuide(err);
+      toast('连不上后端服务：' + err.message, 'error');
       return null;
     });
-  }
-
-  // 直连模式下没有 /api/health，能力表在前端写死（direct.js 里）
-  function applyDirectHealth() {
-    var caps = (window.MDLDirect && window.MDLDirect.capabilities) || {};
-    var box = $('providers');
-    if (box) {
-      box.textContent = '';
-      ['netease', 'qq', 'kugou', 'kuwo'].forEach(function (name) {
-        var cap = caps[name] || {};
-        var pill = el('span', 'pill' + (cap.search ? ' is-on' : ' is-off'));
-        pill.setAttribute('data-provider', name);
-        pill.title = cap.search
-          ? (cap.download ? PROVIDER_LABEL[name] + ' · 可搜索可下载' : PROVIDER_LABEL[name] + ' · 只可搜索（' + (cap.reason || '') + '）')
-          : PROVIDER_LABEL[name] + ' · 纯前端不可用（' + (cap.reason || '') + '）';
-        pill.appendChild(el('span', 'dot'));
-        pill.appendChild(document.createTextNode(PROVIDER_LABEL[name]));
-        box.appendChild(pill);
-      });
-    }
-    var badgeEl = $('versionBadge');
-    if (badgeEl) badgeEl.textContent = '直连';
-    setStatus('纯前端直连模式：搜索走 JSONP，酷狗可直接下载，其它平台建议配置后端', false);
   }
 
   /* ------------------------------ 模式识别 ------------------------------ */
@@ -492,9 +440,9 @@
     if (!empty) return;
     $('emptyTitle').textContent = '未连接后端';
     $('emptyText').textContent =
-      '没有后端也能搜：直连模式会走 JSONP 搜 QQ / 酷狗 / 酷我，酷狗可以直接下载。' +
-      '想要网易云、FLAC 和封面歌词标签，就填一个后端地址——' +
-      '本地跑 mdl serve 填 http://127.0.0.1:8000，或者部署 worker/ 里的 Cloudflare 中继。' +
+      '搜索、解析、下载、封面歌词标签和账号歌单都靠后端，先在本机跑起 mdl serve，' +
+      '再打开 http://127.0.0.1:8000 即可。' +
+      '已经起在别的地址或端口，就在「⚙ 设置」里填那个地址。' +
       (err && err.message ? '（当前：' + err.message + '）' : '');
     empty.hidden = false;
   }
@@ -687,27 +635,6 @@
       cover_url: track.cover_url || '',
       duration_ms: Number(track.duration_ms) || 0
     };
-
-    if (state.direct && window.MDLDirect) {
-      if (!window.MDLDirect.canDownload(track.provider)) {
-        var cap = window.MDLDirect.capabilities[track.provider] || {};
-        setButtonLoading(btn, false);
-        toast(
-          providerLabel(track.provider) + ' 纯前端下载不了：' + (cap.reason || '接口限制') +
-            '。点右上角「⚙ 设置」配一个后端地址即可。',
-          'warn'
-        );
-        return;
-      }
-      window.MDLDirect.download(track, payload.quality).then(function (res) {
-        setButtonDone(btn);
-        toast('已保存：' + res.file + ' · ' + humanSize(res.size) + ' · ' + res.quality, 'ok');
-      }).catch(function (err) {
-        setButtonLoading(btn, false);
-        toast('下载失败：' + err.message, 'error');
-      });
-      return;
-    }
 
     api('/api/download', { method: 'POST', body: payload }).then(function (res) {
       setButtonDone(btn);
@@ -953,23 +880,6 @@
 
     var q = quality || DEFAULT_QUALITY;
 
-    // 直连模式没有批量接口，直接走前端串行
-    if (state.direct) {
-      restoreBtn();
-      var usable = list.filter(function (t) {
-        return window.MDLDirect && window.MDLDirect.canDownload(t.provider);
-      });
-      if (!usable.length) {
-        toast('这批曲目在当前前端模式下都下载不了，配置后端后可用', 'warn');
-        return;
-      }
-      if (usable.length < list.length) {
-        toast('跳过 ' + (list.length - usable.length) + ' 首暂不支持的曲目', 'warn');
-      }
-      runSerialBatch(usable, q);
-      return;
-    }
-
     api('/api/download/batch', {
       method: 'POST',
       body: { quality: q, tracks: list }
@@ -1071,10 +981,8 @@
     job.current = '正在下载 ' + (item.title || '');
     renderJobs();
 
-    // 直连模式：前端自己拉 CDN 并保存
-    var runner = state.direct && window.MDLDirect
-      ? window.MDLDirect.download(track, job._quality)
-      : api('/api/download', {
+    // 批量接口不可用时，逐首调用单曲下载
+    var runner = api('/api/download', {
           method: 'POST',
           body: {
             provider: track.provider || '',
@@ -1504,20 +1412,6 @@
     setBusy(true);
     setStatus('正在搜索「' + q + '」…', false);
 
-    if (state.direct && window.MDLDirect) {
-      window.MDLDirect.search(q, prov, SEARCH_LIMIT).then(function (data) {
-        renderSearchResult(data);
-      }).catch(function (err) {
-        clearResults();
-        showEmpty('搜索失败', err.message);
-        setStatus('搜索失败：' + err.message, true);
-        toast('搜索失败：' + err.message, 'error');
-      }).then(function () {
-        setBusy(false);
-      });
-      return;
-    }
-
     var url = '/api/search?q=' + encodeURIComponent(q) +
       '&provider=' + encodeURIComponent(prov) +
       '&limit=' + SEARCH_LIMIT;
@@ -1546,20 +1440,6 @@
     setBusy(true);
     setStatus('正在解析链接…', false);
 
-    if (state.direct && window.MDLDirect) {
-      window.MDLDirect.resolve(url).then(function (data) {
-        renderResolve(data);
-      }).catch(function (err) {
-        clearResults();
-        showEmpty('解析失败', err.message);
-        setStatus('解析失败：' + err.message, true);
-        toast('解析失败：' + err.message, 'error');
-      }).then(function () {
-        setBusy(false);
-      });
-      return;
-    }
-
     api('/api/resolve', { method: 'POST', body: { url: url }, signal: signal }).then(function (data) {
       renderResolve(data);
     }).catch(function (err) {
@@ -1572,6 +1452,27 @@
       if (state.ctrl && state.ctrl.signal === signal) setBusy(false);
       else if (!signal) setBusy(false);
     });
+  }
+
+  // 账号面板里点开一个歌单：直接复用解析结果的渲染，用户就能批量下载
+  function onPlaylistLoaded(title, tracks) {
+    var list = Array.isArray(tracks) ? tracks : [];
+    if (!list.length) {
+      toast('这个歌单里没有曲目', 'warn');
+      return;
+    }
+    var first = list[0] || {};
+    renderResolve({
+      provider: first.provider || '',
+      kind: 'playlist',
+      title: title || '歌单',
+      cover_url: first.cover_url || '',
+      source_url: '',
+      tracks: list
+    });
+    setStatus('已载入「' + (title || '歌单') + '」共 ' + list.length + ' 首', false);
+    var main = document.querySelector('.main');
+    if (main && main.scrollIntoView) main.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   function submitSearch() {
@@ -1793,11 +1694,15 @@
     // ?api= 会覆盖上面的结果并落盘；同时取出 ?q= / ?url= 的待执行动作
     var intent = consumeDeepLink();
 
-    // 健康检查决定了 state.direct，深链接的搜索必须等它落定再发，
-    // 否则会拿后端模式的路由去打一个没有后端的站点。
+    // 健康检查先确认后端在线，深链接的搜索再发；否则只会拿一堆连接错误刷屏
     loadHealth().then(function () {
       applyDeepLinkIntent(intent);
     });
+
+    // 账号面板（account.js）自己管自己的 DOM 与请求，这里只接一个「歌单载入」回调
+    if (window.MDLAccount && typeof window.MDLAccount.init === 'function') {
+      window.MDLAccount.init({ onPlaylistLoaded: onPlaylistLoaded });
+    }
 
     var input = $('q');
     if (input) input.focus();

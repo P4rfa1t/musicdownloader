@@ -11,11 +11,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..models import ResolveResult, StreamInfo, Track
-from .base import Provider, StreamUnavailable, strip_tags
+from ..models import AccountInfo, Playlist, ResolveResult, StreamInfo, Track
+from .base import AccountError, Provider, StreamUnavailable, strip_tags
 
 SEARCH = "http://search.kuwo.cn/r.s"
 PLAY = "http://nmobi.kuwo.cn/mobi.s"
+PLIST = "http://nplserver.kuwo.cn/pl.svc"
 REFERER = "http://www.kuwo.cn/"
 
 # 档位 -> convert_url2 的 br 参数
@@ -25,6 +26,13 @@ BR_PARAM = {"128": "128kmp3", "192": "192kmp3", "320": "320kmp3", "flac": "2000k
 class KuwoProvider(Provider):
     name = "kuwo"
     referer = REFERER
+
+    # 酷我 web 的账号接口要求 csrf 头 = 站点 JS 现场生成的 kw_token，
+    # 无浏览器环境取不到（换 Hm_* cookie 也过不了），所以账号歌单只读公开歌单。
+    label = "酷我"
+    login_modes = ("cookie",)
+    playlists_supported = False
+    account_note = "酷我账号接口要求站点动态 CSRF token，本工具只读公开歌单；可直接粘贴歌单链接或 pid"
 
     # ---------- 搜索 ----------
 
@@ -173,6 +181,67 @@ class KuwoProvider(Provider):
         if "[ti:" in text or "[00:" in text:
             return text
         return ""
+
+    # ---------- 歌单 ----------
+
+    async def playlist_tracks(
+        self, playlist_id: str, cookie: str = ""
+    ) -> tuple[str, list[Track]]:
+        """公开歌单曲目。nplserver 必须带 vipver=1，否则 musiclist 恒为空。"""
+        pid = str(playlist_id).strip()
+        if not pid.isdigit():
+            raise AccountError(self.name, "酷我歌单 id 应为数字（pid）")
+        tracks: list[Track] = []
+        title = ""
+        total = 0
+        for page in range(10):  # 最多 1000 首
+            data = await self.http.get_json(
+                PLIST,
+                headers=self.headers_with(cookie, {"Referer": "https://www.kuwo.cn/"}),
+                params={
+                    "op": "getlistinfo",
+                    "pid": pid,
+                    "pn": page,
+                    "rn": 100,
+                    "encode": "utf8",
+                    "keyset": "pl2012",
+                    "identity": "kuwo",
+                    "pcmp4": 1,
+                    "vipver": 1,
+                },
+            )
+            body = data or {}
+            title = title or strip_tags(body.get("title") or "")
+            total = int(body.get("total") or 0)
+            items = body.get("musiclist") or []
+            tracks.extend(self._track_from_plist(it) for it in items)
+            if len(items) < 100 or (total and len(tracks) >= total):
+                break
+        if not tracks:
+            raise AccountError(self.name, "歌单为空或不存在（酷我只开放公开歌单）")
+        return title or f"酷我歌单 {pid}", tracks
+
+    def _track_from_plist(self, it: dict[str, Any]) -> Track:
+        rid = str(it.get("id") or it.get("musicid") or "")
+        artist = strip_tags(it.get("artist") or it.get("AARTIST") or "")
+        pic = (it.get("albumpic") or it.get("musicPic") or "").strip()
+        if pic.startswith("http://"):
+            pic = "https://" + pic[7:]
+        return Track(
+            provider=self.name,
+            id=rid,
+            title=strip_tags(it.get("name") or it.get("SONGNAME") or ""),
+            artists=[artist] if artist else [],
+            album=strip_tags(it.get("album") or ""),
+            duration_ms=int(it.get("duration") or 0) * 1000,
+            cover_url=pic,
+            source_url=f"https://www.kuwo.cn/play_detail/{rid}",
+            extra={
+                "formats": (it.get("formats") or "").split("|"),
+                "pay": it.get("pay"),
+                "n_minfo": it.get("N_MINFO"),
+            },
+        )
 
     # ---------- 链接解析 ----------
 

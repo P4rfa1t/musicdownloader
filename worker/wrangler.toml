@@ -1,8 +1,0 @@
-name = "mdl-relay"
-main = "worker.js"
-compatibility_date = "2024-11-01"
-
-# 可选：给 Worker 加访问令牌，防止别人白嫖你的免费额度。
-# 设置后前端要在「⚙ 设置」里填 https://xxx.workers.dev?token=你的令牌
-# [vars]
-# MDL_TOKEN = "换成你自己的随机串"

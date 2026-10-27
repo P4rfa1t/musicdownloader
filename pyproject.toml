@@ -16,7 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+# 扫码登录要用它生成二维码；没装时账号面板降级成只支持粘贴 Cookie
+qr = ["qrcode>=7.4", "pillow>=10"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "qrcode>=7.4", "pillow>=10"]
 
 [project.scripts]
 mdl = "mdl.cli:main"

@@ -212,24 +212,24 @@ async def test_file_traversal_blocked(client: AsyncClient) -> None:
     assert r.status_code in (403, 404)
 
 
-async def test_cors_allows_github_pages(client: AsyncClient) -> None:
-    """Pages 上的静态前端要跨域调后端，预检必须放行。"""
+async def test_cors_allows_local_dev_port(client: AsyncClient) -> None:
+    """前端由后端托管后，跨域只剩本机调试场景：本机端口放行。"""
     async with client as c:
         r = await c.options(
             "/api/search",
             headers={
-                "Origin": "https://p4rfa1t.github.io",
+                "Origin": "http://127.0.0.1:5173",
                 "Access-Control-Request-Method": "GET",
             },
         )
     assert r.status_code == 200
-    assert r.headers.get("access-control-allow-origin") == "https://p4rfa1t.github.io"
+    assert r.headers.get("access-control-allow-origin") == "http://127.0.0.1:5173"
 
 
-async def test_cors_allows_any_github_io_subdomain(client: AsyncClient) -> None:
+async def test_cors_allows_localhost_any_port(client: AsyncClient) -> None:
     async with client as c:
-        r = await c.get("/api/health", headers={"Origin": "https://someone.github.io"})
-    assert r.headers.get("access-control-allow-origin") == "https://someone.github.io"
+        r = await c.get("/api/health", headers={"Origin": "http://localhost:8810"})
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:8810"
 
 
 async def test_cors_rejects_foreign_origin(client: AsyncClient) -> None:

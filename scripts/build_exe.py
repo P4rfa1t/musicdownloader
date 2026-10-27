@@ -67,7 +67,7 @@ def smoke_test(exe: Path) -> None:
 
     # 静态资源必须打进去，否则 exe 起来只有 404
     internal = DIST / "_internal" / "mdl" / "web"
-    for name in ("index.html", "app.js", "app.css", "direct.js"):
+    for name in ("index.html", "app.js", "app.css", "account.js", "account.css"):
         if not (internal / name).is_file():
             raise SystemExit(f"缺少前端资源: {internal / name}")
     print(f"  -> 前端资源完整（{len(list(internal.glob('*')))} 个文件）")

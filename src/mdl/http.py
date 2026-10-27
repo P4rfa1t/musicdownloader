@@ -59,6 +59,14 @@ class Http:
             raise HttpError("Http 未初始化，请先 await http.open()")
         return self._client
 
+    def set_cookie(self, provider: str, cookie: str) -> None:
+        """运行期换 Cookie（登录 / 退出面板操作后立刻生效，不用重启服务）。"""
+        cookie = (cookie or "").strip()
+        if cookie:
+            self._cookies[provider] = cookie
+        else:
+            self._cookies.pop(provider, None)
+
     def headers_for(self, provider: str, referer: str = "") -> dict[str, str]:
         h: dict[str, str] = {"User-Agent": settings.user_agent}
         if referer:

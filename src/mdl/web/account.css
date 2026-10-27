@@ -1,0 +1,511 @@
+/* ==========================================================================
+   MusicDL — 账号面板样式
+   只作用于 .acct-* 命名空间，不改任何全局变量与 app.css 里的选择器。
+   颜色全部取自 app.css 的 :root 变量，保证是同一个产品。
+   ========================================================================== */
+
+.acct-open { overflow: hidden; }
+
+/* ------------------------------ 弹层骨架 ------------------------------ */
+
+.acct-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 160; /* 比设置弹层(150)高一级，账号面板可能从设置里被唤起 */
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: acctFade 140ms ease-out;
+}
+.acct-modal[hidden] { display: none; }
+
+@keyframes acctFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.acct-card {
+  width: min(620px, 100%);
+  max-height: calc(100vh - 36px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-3);
+  overflow: hidden;
+  animation: acctRise 180ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+@keyframes acctRise {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+.acct-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  flex: 0 0 auto;
+}
+.acct-head h2 {
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--text-0);
+}
+.acct-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.acct-head-actions .ghost-btn { height: 28px; padding: 0 12px; font-size: 12px; }
+.acct-close {
+  display: grid;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.acct-intro {
+  padding: 11px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg-1);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-3);
+  flex: 0 0 auto;
+}
+
+.acct-body {
+  padding: 14px 16px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ------------------------------ 平台卡片 ------------------------------ */
+
+.acct-plat {
+  background: var(--bg-1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  /* .acct-body 是 flex 列，配上 overflow:hidden 后 min-height 解析成 0，
+     卡片会被压扁、内容被裁掉，必须显式禁掉收缩 */
+  flex: 0 0 auto;
+}
+
+.acct-plat-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--line-soft);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent);
+}
+
+.acct-state {
+  font-size: 12px;
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acct-state::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex: 0 0 auto;
+}
+.acct-state.is-ok { color: var(--accent); }
+.acct-state.is-ok::before { background: var(--accent); }
+.acct-state.is-warn { color: var(--warn); }
+.acct-state.is-warn::before { background: var(--warn); }
+.acct-state.is-error { color: var(--danger); }
+.acct-state.is-error::before { background: var(--danger); }
+.acct-state.is-busy { color: var(--text-2); }
+.acct-state.is-busy::before {
+  background: var(--text-2);
+  animation: acctPulse 900ms ease-in-out infinite;
+}
+@keyframes acctPulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+.acct-plat-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.acct-plat-actions .ghost-btn {
+  height: 26px;
+  padding: 0 11px;
+  font-size: 11.5px;
+}
+.acct-plat-actions .ghost-btn[hidden] { display: none; }
+
+/* 身份行 */
+
+.acct-ident {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 13px 0;
+  font-size: 12.5px;
+  color: var(--text-0);
+}
+.acct-ident[hidden] { display: none; }
+
+.acct-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background-color: var(--bg-3);
+  background-size: cover;
+  background-position: center;
+  border: 1px solid var(--line);
+}
+.acct-avatar[hidden] { display: none; }
+
+.acct-nick {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acct-vip {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  color: #2a1f00;
+  background: var(--p-kuwo);
+}
+.acct-vip[hidden] { display: none; }
+
+/* 错误行：失败必须显性，不静默 */
+
+.acct-err {
+  margin: 10px 13px 0;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid rgba(255, 93, 108, 0.24);
+  background: var(--danger-soft);
+  color: #ffb3ba;
+  font-size: 11.5px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.acct-err[hidden] { display: none; }
+
+/* ------------------------------ 操作区 ------------------------------ */
+
+.acct-ops { padding: 11px 13px 13px; }
+
+.acct-op-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.acct-op-row + .acct-op-row { margin-top: 9px; }
+
+.acct-login-btn { height: 30px; padding: 0 14px; font-size: 12.5px; }
+
+/* 按钮行里两个按钮同尺寸，四张卡看起来才是一套结构 */
+.acct-op-row .ghost-btn {
+  height: 30px;
+  padding: 0 14px;
+  font-size: 12.5px;
+}
+.acct-op-row .ghost-btn[hidden] { display: none; }
+
+/* 「取消」比「保存」轻一档，但仍是按钮尺寸 */
+.acct-cancel-btn { color: var(--text-2); }
+.acct-cancel-btn:hover { color: var(--text-0); }
+
+.acct-save-btn {
+  height: 30px;
+  padding: 0 16px;
+  font-size: 12.5px;
+  border-radius: var(--r-md);
+}
+
+
+
+/* 二维码 */
+
+.acct-qr {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-bottom: 11px;
+  padding: 11px;
+  border-radius: var(--r-md);
+  background: var(--bg-0);
+  border: 1px solid var(--line-soft);
+}
+.acct-qr[hidden] { display: none; }
+
+.acct-qr-frame {
+  width: 132px;
+  height: 132px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: #fff; /* 二维码必须白底，暗色下扫不出来 */
+  overflow: hidden;
+}
+.acct-qr-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.acct-qr-msg {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-1);
+}
+.acct-qr-msg.is-scanned { color: var(--warn); }
+.acct-qr-msg.is-ok { color: var(--accent); }
+.acct-qr-msg.is-expired { color: var(--danger); }
+.acct-qr-msg.is-error { color: var(--danger); }
+
+/* Cookie 输入（默认收起，点「粘贴 Cookie」展开） */
+
+.acct-cookie { display: block; }
+.acct-cookie[hidden] { display: none; }
+/* 展开时给一点高度变化，避免整块卡片“跳”一下 */
+.acct-cookie:not([hidden]) { animation: acctUnfold 140ms ease-out; }
+
+@keyframes acctUnfold {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+
+.acct-textarea {
+  width: 100%;
+  min-height: 62px;
+  max-height: 160px;
+  resize: vertical;
+  padding: 9px 11px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  outline: none;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.acct-textarea::placeholder { color: var(--text-3); }
+.acct-textarea:focus {
+  border-color: rgba(34, 211, 166, 0.55);
+  box-shadow: 0 0 0 3px rgba(34, 211, 166, 0.1);
+}
+.acct-textarea + .acct-op-row { margin-top: 9px; }
+
+.acct-hint {
+  margin: 9px 0 0;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--text-3);
+}
+
+/* ------------------------------ 歌单 ------------------------------ */
+
+.acct-pls {
+  border-top: 1px solid var(--line-soft);
+  padding: 11px 13px 13px;
+}
+.acct-pls[hidden] { display: none; }
+
+.acct-pls-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+.acct-pls-title span {
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-3);
+  margin-left: 4px;
+}
+
+.acct-pls-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 210px;
+  overflow-y: auto;
+  margin: 0 -5px;
+  padding: 0 5px;
+}
+
+.acct-pl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.acct-pl:hover {
+  background: var(--bg-3);
+  border-color: var(--line-soft);
+}
+.acct-pl:active { transform: translateY(1px); }
+
+.acct-pl-cover {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: var(--r-sm);
+  background-color: var(--bg-3);
+  background-size: cover;
+  background-position: center;
+  border: 1px solid var(--line-soft);
+}
+.acct-pl-cover.is-empty { background-image: none; }
+
+.acct-pl-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.acct-pl-name {
+  font-size: 12.5px;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acct-pl-sub {
+  font-size: 11px;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.acct-sep { color: var(--text-3); opacity: 0.6; }
+
+/* 提示 / 空态 / 错误 */
+
+.acct-note {
+  padding: 9px 11px;
+  border-radius: var(--r-sm);
+  background: var(--bg-0);
+  border: 1px solid var(--line-soft);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+  word-break: break-word;
+}
+.acct-note.is-err {
+  border-color: rgba(255, 93, 108, 0.3);
+  background: var(--danger-soft);
+  color: #ffb3ba;
+}
+.acct-note + .acct-pls-title { margin-top: 9px; }
+
+/* 无回调时的曲目预览 */
+
+.acct-track-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.acct-track {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 8px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.acct-track:last-child { border-bottom: 0; }
+
+.acct-track-title {
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acct-track-sub {
+  color: var(--text-3);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.acct-track-dur {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------ 窄屏 ------------------------------ */
+
+@media (max-width: 560px) {
+  .acct-modal { padding: 10px; }
+  .acct-card { max-height: calc(100vh - 20px); }
+  .acct-body { padding: 12px 11px 14px; }
+  .acct-intro { padding: 10px 13px; }
+  .acct-qr { flex-direction: column; align-items: flex-start; }
+  .acct-qr-frame { width: 100%; max-width: 168px; height: auto; aspect-ratio: 1 / 1; }
+  /* 卡片收起来以后一屏能放四家，头部就没必要再折成两行——
+     折行还会在状态行下面留一条空白带，看着像漏了内容 */
+  .acct-plat-head { flex-wrap: nowrap; }
+  .acct-state { flex: 1 1 auto; }
+}
+
+/* 尊重系统的减少动效设置 */
+@media (prefers-reduced-motion: reduce) {
+  .acct-modal,
+  .acct-card,
+  .acct-state.is-busy::before { animation: none; }
+}

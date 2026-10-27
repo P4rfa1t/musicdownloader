@@ -10,11 +10,13 @@ import base64
 import re
 from typing import Any
 
-from ..models import ResolveResult, StreamInfo, Track
-from .base import Provider, StreamUnavailable, strip_tags
+from ..models import AccountInfo, Playlist, ResolveResult, StreamInfo, Track
+from .base import AccountError, Provider, StreamUnavailable, strip_tags
 
 SEARCH = "https://songsearch.kugou.com/song_search_v2"
 PLAYINFO = "https://m.kugou.com/app/i/getSongInfo.php"
+PLIST_SONG = "https://mobiles.kugou.com/api/v3/special/song"
+PLIST_INFO = "https://mobiles.kugou.com/api/v3/special/info"
 KRC_SEARCH = "https://krcs.kugou.com/search"
 KRC_DOWNLOAD = "https://lyrics.kugou.com/download"
 REFERER = "https://www.kugou.com/"
@@ -30,6 +32,13 @@ HASH_KEYS = {
 class KugouProvider(Provider):
     name = "kugou"
     referer = REFERER
+
+    # 酷狗账号歌单在 App 端签名接口后面（signature + dfid + mid），网页 Cookie 打不开，
+    # 所以这里只声明粘贴 Cookie 用于提升音质/解锁，歌单仅支持公开歌单。
+    label = "酷狗"
+    login_modes = ("cookie",)
+    playlists_supported = False
+    account_note = "酷狗账号歌单走 App 端签名接口，本工具只读公开歌单；可直接粘贴歌单链接或 specialid"
 
     # ---------- 搜索 ----------
 
@@ -187,6 +196,83 @@ class KugouProvider(Provider):
             return base64.b64decode(content).decode("utf-8", "replace")
         except Exception:
             return ""
+
+    # ---------- 歌单 ----------
+
+    async def playlist_tracks(
+        self, playlist_id: str, cookie: str = ""
+    ) -> tuple[str, list[Track]]:
+        """公开歌单曲目。mobiles.kugou.com 的 special/song 不需要签名，匿名可读。"""
+        specialid = str(playlist_id).strip()
+        if not specialid.isdigit():
+            raise AccountError(self.name, "酷狗歌单 id 应为数字（specialid）")
+        tracks: list[Track] = []
+        total = 0
+        for page in range(1, 11):  # 最多 1000 首
+            data = await self.http.get_json(
+                PLIST_SONG,
+                headers=self.headers_with(cookie, {"Referer": "https://m.kugou.com/"}),
+                params={
+                    "specialid": specialid,
+                    "page": page,
+                    "pagesize": 100,
+                    "version": 9108,
+                },
+            )
+            body = (data or {}).get("data") or {}
+            total = int(body.get("total") or 0)
+            info = body.get("info") or []
+            tracks.extend(self._track_from_plist(it) for it in info)
+            if len(info) < 100 or (total and len(tracks) >= total):
+                break
+        if not tracks:
+            raise AccountError(self.name, "歌单为空或不存在（酷狗只开放公开歌单）")
+        title = await self._playlist_title(specialid, cookie)
+        return title or f"酷狗歌单 {specialid}", tracks
+
+    async def _playlist_title(self, specialid: str, cookie: str = "") -> str:
+        try:
+            data = await self.http.get_json(
+                PLIST_INFO,
+                headers=self.headers_with(cookie, {"Referer": "https://m.kugou.com/"}),
+                params={"specialid": specialid, "version": 9108},
+            )
+        except Exception:  # 标题失败不该影响曲目
+            return ""
+        info = (data or {}).get("data") or {}
+        return strip_tags(
+            info.get("specialname") or info.get("title") or info.get("name") or ""
+        )
+
+    def _track_from_plist(self, it: dict[str, Any]) -> Track:
+        # 歌单接口里没有独立的歌名/歌手字段，只有 "歌手 - 歌名" 的 filename
+        raw = strip_tags(it.get("filename") or "")
+        if " - " in raw:
+            artist, _, title = raw.partition(" - ")
+        else:
+            artist, title = "", raw
+        hashes = {
+            "128": (it.get("hash") or "").lower(),
+            "320": (it.get("320hash") or "").lower(),
+            "flac": (it.get("sqhash") or "").lower(),
+        }
+        return Track(
+            provider=self.name,
+            id=hashes["128"],
+            title=title.strip(),
+            artists=[artist.strip()] if artist.strip() else [],
+            album="",
+            duration_ms=int(it.get("duration") or 0) * 1000,
+            cover_url="",
+            source_url=f"https://www.kugou.com/song/#hash={hashes['128']}",
+            extra={
+                "hashes": hashes,
+                "album_id": it.get("album_id"),
+                "audio_id": it.get("audio_id"),
+                "privilege": it.get("privilege"),
+                "pay_type": it.get("pay_type"),
+            },
+        )
 
     # ---------- 链接解析 ----------
 

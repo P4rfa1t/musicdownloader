@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from ..http import Http
-from ..models import ResolveResult, StreamInfo, Track
+from ..models import AccountInfo, Playlist, ResolveResult, StreamInfo, Track
 
 _HTML_TAG = re.compile(r"</?[a-zA-Z][^>]*>")
 
@@ -28,9 +28,19 @@ class Provider(abc.ABC):
     """
 
     name: str = ""
+    # 中文显示名，接口与界面都用它，别在前端再维护一份映射
+    label: str = ""
     referer: str = ""
     # 该平台是否提供歌词接口
     supports_lyric: bool = True
+
+    # ---------- 账号能力声明 ----------
+    # 支持的登录方式："cookie" 粘贴凭据，"qr" 扫码。顺序即 UI 展示优先顺序。
+    login_modes: tuple[str, ...] = ("cookie",)
+    # 是否能读该账号的歌单
+    playlists_supported: bool = False
+    # 能力受限时给用户看的一句话（比如「酷我需要站点 CSRF token」）
+    account_note: str = ""
 
     def __init__(self, http: Http) -> None:
         self.http = http
@@ -75,7 +85,45 @@ class Provider(abc.ABC):
         """从 URL 中提取 id，子类按自身规则覆盖。"""
         return None
 
+    # ---------- 账号（可选实现） ----------
+
+    async def account_info(self, cookie: str) -> AccountInfo | None:
+        """校验 cookie 属于谁。拿不到就返回 None，UI 会显示「已保存，未验证」。"""
+        return None
+
+    async def user_playlists(self, cookie: str) -> list[Playlist]:
+        """当前账号的歌单。"""
+        raise AccountError(self.name, "该平台暂不支持读取账号歌单")
+
+    async def playlist_tracks(
+        self, playlist_id: str, cookie: str = ""
+    ) -> tuple[str, list[Track]]:
+        """取歌单内的曲目，返回 (歌单名, 曲目列表)。"""
+        raise AccountError(self.name, "该平台暂不支持读取歌单曲目")
+
+    async def qr_start(self) -> dict[str, Any]:
+        """申请扫码登录。返回 {key, qr_image, qr_text, expires_in}。
+
+        只有 login_modes 里含 "qr" 的平台才实现。
+        """
+        raise NotImplementedError(f"{self.name} 不支持扫码登录，请粘贴 Cookie")
+
+    async def qr_poll(self, key: str) -> dict[str, Any]:
+        """轮询扫码状态。返回 {status, message, cookie?, account?}。"""
+        raise NotImplementedError(f"{self.name} 不支持扫码登录")
+
     # ---------- 工具 ----------
+
+    def headers_with(
+        self, cookie: str = "", extra: dict[str, str] | None = None
+    ) -> dict[str, str]:
+        """显式指定 cookie（优先于 Http 里登记的），用于账号相关请求。"""
+        h = self.http.headers_for(self.name, self.referer)
+        if cookie:
+            h["Cookie"] = cookie
+        if extra:
+            h.update(extra)
+        return h
 
     def headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         h = self.http.headers_for(self.name, self.referer)
@@ -85,6 +133,15 @@ class Provider(abc.ABC):
 
     def __repr__(self) -> str:
         return f"<Provider {self.name}>"
+
+
+class AccountError(RuntimeError):
+    """账号相关操作失败（cookie 无效、平台不支持、被风控）。"""
+
+    def __init__(self, provider: str, reason: str) -> None:
+        self.provider = provider
+        self.reason = reason
+        super().__init__(f"[{provider}] {reason}")
 
 
 class StreamUnavailable(RuntimeError):

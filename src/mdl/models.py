@@ -93,6 +93,52 @@ class Target:
 
 
 @dataclass
+class AccountInfo:
+    """一个平台上「当前 Cookie 对应的是谁」。"""
+
+    provider: str
+    logged_in: bool = False
+    nickname: str = ""
+    avatar: str = ""
+    uid: str = ""
+    vip: bool = False
+    # 平台自己喊的等级名（如网易云 0-10），没有则空
+    level: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "logged_in": self.logged_in,
+            "nickname": self.nickname,
+            "avatar": self.avatar,
+            "uid": self.uid,
+            "vip": self.vip,
+            "level": self.level,
+        }
+
+
+@dataclass
+class Playlist:
+    """账号下的一个歌单（也用于公开歌单）。"""
+
+    provider: str
+    id: str
+    name: str
+    track_count: int = 0
+    cover_url: str = ""
+    creator: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "track_count": self.track_count,
+            "cover": self.cover_url,
+            "creator": self.creator,
+        }
+
+
+@dataclass
 class ResolveResult:
     """解析结果：可能是单曲，也可能是歌单展开后的多曲。"""
 

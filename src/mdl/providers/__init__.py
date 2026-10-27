@@ -7,7 +7,7 @@ from typing import Iterable
 
 from ..http import Http
 from ..models import Target
-from .base import Provider, StreamUnavailable, strip_tags
+from .base import AccountError, Provider, StreamUnavailable, strip_tags
 from .kugou import KugouProvider
 from .kuwo import KuwoProvider
 from .netease import NeteaseProvider
@@ -20,7 +20,19 @@ PROVIDER_CLASSES: dict[str, type[Provider]] = {
     "kuwo": KuwoProvider,
 }
 
+# 界面展示名。加新平台时这里必须同步，否则前端会显示内部 id。
+DISPLAY_NAMES: dict[str, str] = {
+    "netease": "网易云",
+    "qq": "QQ音乐",
+    "kugou": "酷狗",
+    "kuwo": "酷我",
+}
+
 ALL_PROVIDERS: list[str] = list(PROVIDER_CLASSES)
+
+
+def display_name(provider: str) -> str:
+    return DISPLAY_NAMES.get(provider, provider)
 
 
 class Registry:
@@ -95,9 +107,12 @@ def _kind_of(provider: Provider, url: str) -> str:
 
 __all__ = [
     "ALL_PROVIDERS",
+    "DISPLAY_NAMES",
     "PROVIDER_CLASSES",
+    "AccountError",
     "Registry",
     "Provider",
     "StreamUnavailable",
+    "display_name",
     "strip_tags",
 ]

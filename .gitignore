@@ -33,3 +33,6 @@ pytest-of-*/
 # docs/
 worker/node_modules/
 .wrangler/
+
+# 临时调试产物
+tmp_*

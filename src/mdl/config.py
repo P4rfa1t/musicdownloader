@@ -66,6 +66,14 @@ class Settings:
     def cookie_for(self, provider: str) -> str:
         return self.cookies.get(provider, "")
 
+    # 账号凭据落盘位置（粘贴 / 扫码登录的结果写这里）。
+    # 默认放在用户目录而不是工作目录：它是明文凭据，不该跟着仓库或下载目录到处走。
+    account_file: Path = field(
+        default_factory=lambda: Path(_env("MDL_ACCOUNT_FILE") or "cookies.json")
+    )
+    # 扫码登录的二维码有效期（秒）。网易云 unikey 官方给 5 分钟。
+    qr_ttl: int = 300
+
 
 settings = Settings()
 
@@ -73,15 +81,13 @@ settings = Settings()
 def cors_origins() -> list[str]:
     """允许跨域的前端来源。
 
-    GitHub Pages 上的静态前端需要一个后端地址，浏览器会带 Origin 过来，
-    所以默认放开 Pages 域名和本地开发端口。用 MDL_CORS_ORIGINS 覆盖，
-    逗号分隔，或设为 "*" 允许任意来源。
+    默认只放开本地开发端口：现在前端由后端自己托管（同源），跨域只为方便本地调试。
+    用 MDL_CORS_ORIGINS 覆盖，逗号分隔，或设为 "*" 允许任意来源。
     """
     raw = _env("MDL_CORS_ORIGINS")
     if raw:
         return [o.strip() for o in raw.split(",") if o.strip()]
     return [
-        "https://p4rfa1t.github.io",
         "http://127.0.0.1:8000",
         "http://localhost:8000",
         "http://127.0.0.1:8765",

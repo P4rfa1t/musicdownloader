@@ -2,38 +2,30 @@
 
 多平台音乐解析下载器 —— 粘贴一条歌曲 / 歌单 / 专辑链接，解析出曲目并下载到本地，自动写入封面与歌词标签。
 
-支持 **网易云音乐 · QQ音乐 · 酷狗音乐 · 酷我音乐** 四个平台，带 Web 界面和命令行两套入口。
+支持 **网易云音乐 · QQ音乐 · 酷狗音乐 · 酷我音乐** 四个平台，带 Web 界面和命令行两套入口。Web 界面由后端自己托管，打开就是完整功能，不需要额外部署前端。
 
-**在线版（GitHub Pages）**：<https://p4rfa1t.github.io/musicdownloader/> —— 纯静态前端，**不用配后端就能搜，酷狗的歌可以直接下载到本地**。要网易云 / FLAC / 封面歌词标签时再填一个后端地址，见 [部署到 GitHub Pages](#部署到-github-pages)。
+![搜索界面](screenshots/main.png)
 
-![搜索界面](docs/screenshot-search.png)
+账号面板 —— 扫码登录网易云，登录后直接读账号歌单：
 
-在线版直连模式（无后端，正在搜「Canon」，酷狗那组可下载）：
-
-![直连模式](docs/screenshot-direct.png)
-
-配后端后能力全开的样子：
-
-![Pages 未连接引导](docs/screenshot-pages-guide.png)
+![账号面板](screenshots/account.png)
 
 ```
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│   网易云      │   │   QQ 音乐     │   │    酷狗       │   │    酷我       │
-└──────┬───────┘   └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
-       └──────────────────┴──────────────────┴──────────────────┘
-                                  │
-                        ┌─────────▼─────────┐
-                        │  Registry 统一抽象  │
-                        │ search / resolve  │
-                        │ stream / lyric    │
-                        └─────────┬─────────┘
-                                  │
-                    ┌─────────────┴─────────────┐
-                    │                           │
-              ┌─────▼─────┐              ┌──────▼──────┐
-              │  Web UI   │              │     CLI     │
-              │ FastAPI   │              │    mdl      │
-              └───────────┘              └─────────────┘
+┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
+│  网易云   │  │  QQ 音乐  │  │   酷狗    │  │   酷我    │
+└────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘
+     └─────────────┴─────────────┴─────────────┘
+                         │
+               ┌─────────▼─────────┐
+               │   Registry 抽象    │   search / resolve
+               │                   │   stream / lyric / account
+               └─────────┬─────────┘
+                         │
+              ┌──────────┴──────────┐
+        ┌─────▼─────┐         ┌─────▼─────┐
+        │  Web UI   │         │    CLI    │
+        │  FastAPI  │         │    mdl    │
+        └───────────┘         └───────────┘
 ```
 
 ## 快速开始
@@ -98,6 +90,43 @@ mdl dl -p netease -i 5257138 -q 320
 mdl dl -p kugou -k "Canon 钢琴" -q 128
 ```
 
+## 账号登录与歌单
+
+Web 界面右上角「账号」按钮打开账号面板，四个平台各一张卡，状态一目了然（未登录 / 已登录 + 昵称头像 / 已保存 Cookie 但身份未验证）。
+
+| 平台 | 登录方式 | 账号歌单 | 说明 |
+| --- | --- | --- | --- |
+| 网易云 | 扫码（站内二维码） / 粘贴 Cookie | ✅ 创建 + 收藏的歌单 | 扫完自动拉歌单，点歌单直接展开曲目 |
+| QQ音乐 | 粘贴 Cookie | ✅ 全部歌单 | 必须登录才有下载直链（vkey），重点是 `qm_keyst` / `qqmusic_key` |
+| 酷狗 | 粘贴 Cookie | ⚠️ 只读公开歌单 | 账号歌单走 App 端签名接口 |
+| 酷我 | 粘贴 Cookie | ⚠️ 只读公开歌单 | 站点接口要动态 CSRF token |
+
+**凭据只存在本机**：Cookie 写进项目根目录的 `cookies.json`（已 `.gitignore`），只由本机后端读取，不会发给除对应平台以外的任何地方，也不会出现在任何 API 响应里（有一条测试专门盯着这点）。
+
+**扫码登录（网易云）**：点「扫码登录」→ 面板里出现二维码（由后端生成 base64 PNG，不依赖外部图片服务）→ 用手机网易云 App 扫 → 面板自动轮询状态，扫到（`scanned`）→ 确认（`ok`）→ 头像昵称立刻出现并自动拉歌单。二维码默认 5 分钟过期，界面会显示过期并允许重新生成。
+
+**歌单怎么用**：登录后歌单列表直接出现在卡片里，点任意歌单把曲目灌进主界面的结果区，接着搜索框旁边的「下载全部」就能整单拉下来。也能直接在搜索框粘贴公开歌单链接：
+
+| 平台 | 公开歌单链接 |
+| --- | --- |
+| 网易云 | `music.163.com/playlist?id=3778678` |
+| QQ音乐 | `y.qq.com/n/ryqq/playlist/<disstid>` |
+| 酷狗 | `kugou.com/yy/special/single/8268942.html` 或直接填 `specialid` |
+| 酷我 | `kuwo.cn/playlist_detail/<pid>` |
+
+平台能力有差异时界面会如实说明，不会假装成功：酷狗/酷我的账号歌单卡片里直接写着「只读公开歌单」，QQ 音乐没登录就会提示「必须登录才能拿直链」。
+
+也可以用环境变量预置 Cookie（适合服务器常驻、不想碰界面的场景），面板里存的会覆盖环境变量：
+
+```bash
+# Windows PowerShell
+$env:MDL_NETEASE_COOKIE="MUSIC_U=xxxxx; __csrf=yyyyy"
+$env:MDL_QQ_COOKIE="uin=o123456; qm_keyst=xxxxx"
+$env:MDL_KUGOU_COOKIE="kg_mid=xxx; kg_dfid=yyy"
+$env:MDL_KUWO_COOKIE="kw_token=xxx"
+mdl serve
+```
+
 ## 支持的链接
 
 | 平台 | 链接形态 | 说明 |
@@ -116,7 +145,7 @@ mdl dl -p kugou -k "Canon 钢琴" -q 128
 
 ## 功能
 
-搜索聚合四平台、链接解析（单曲 / 歌单 / 专辑）、批量下载（并发 + 任务进度）、音质选择（128 / 192 / 320 / FLAC）、ID3 标签写入（标题 / 歌手 / 专辑 / 封面 / 歌词）、歌词 LRC 文件、文件名模板、下载目录模板、断点重试、Windows 非法字符清洗、同名文件自动去重。
+搜索聚合四平台、链接解析（单曲 / 歌单 / 专辑）、账号登录与歌单读取、批量下载（并发 + 任务进度）、音质选择（128 / 192 / 320 / FLAC）、ID3 标签写入（标题 / 歌手 / 专辑 / 封面 / 歌词）、歌词 LRC 文件、文件名模板、下载目录模板、断点重试、Windows 非法字符清洗、同名文件自动去重。
 
 ## 音质与版权
 
@@ -129,18 +158,7 @@ mdl dl -p kugou -k "Canon 钢琴" -q 128
 - **酷狗**：免费曲目直接给完整 mp3（128k），搜索/歌词/封面全通。
 - **酷我**：搜索、封面通；匿名态多数曲目只返回约 16KB 试听片段，代码会识别并明确报错。
 
-需要解锁更高音质或更多版权时，填对应平台的 Cookie：
-
-```bash
-# Windows PowerShell
-$env:MDL_NETEASE_COOKIE="MUSIC_U=xxxxx; __csrf=yyyyy"
-$env:MDL_QQ_COOKIE="uin=o123456; qm_keyst=xxxxx"
-$env:MDL_KUGOU_COOKIE="kg_mid=xxx; kg_dfid=yyy"
-$env:MDL_KUWO_COOKIE="kw_token=xxx"
-mdl serve
-```
-
-Cookie 从浏览器开发者工具 → Application → Cookies 里复制，属于敏感凭据，别提交进仓库（`.gitignore` 已排除 `.env` 和 `cookies.json`）。
+登录后能解锁的范围：QQ 音乐有直链、网易云会员曲不再被截成 45 秒试听、部分平台码率抬到请求档位。
 
 ## 配置
 
@@ -157,6 +175,7 @@ Cookie 从浏览器开发者工具 → Application → Cookies 里复制，属�
 | `MDL_QQ_COOKIE` | 空 | QQ音乐 Cookie |
 | `MDL_KUGOU_COOKIE` | 空 | 酷狗 Cookie |
 | `MDL_KUWO_COOKIE` | 空 | 酷我 Cookie |
+| `MDL_CORS_ORIGINS` | 本机端口 | 额外放行的跨域来源，逗号分隔 |
 
 ## HTTP API
 
@@ -171,6 +190,13 @@ Cookie 从浏览器开发者工具 → Application → Cookies 里复制，属�
 | POST | `/api/download/batch` | 批量下载，返回 `job_id` |
 | GET | `/api/jobs/{id}` | 轮询任务进度 |
 | GET | `/api/file?path=` | 取下载目录内的文件（限制在下载根目录内） |
+| GET | `/api/accounts` | 四个平台的登录状态（一次拿全） |
+| POST | `/api/accounts/{platform}` | `{"cookie": "..."}` 保存并校验 Cookie |
+| DELETE | `/api/accounts/{platform}` | 退出登录，清掉本地凭据 |
+| POST | `/api/accounts/{platform}/qr` | 申请登录二维码，返回 data URL 图片 |
+| GET | `/api/accounts/{platform}/qr/{key}` | 轮询扫码状态（wait / scanned / ok / expired） |
+| GET | `/api/accounts/{platform}/playlists` | 当前账号的歌单 |
+| GET | `/api/playlists/{platform}/{id}` | 公开歌单曲目 |
 
 ```bash
 curl "http://127.0.0.1:8000/api/search?q=晴天&provider=netease&limit=5"
@@ -180,139 +206,48 @@ curl -X POST http://127.0.0.1:8000/api/resolve \
 curl -X POST http://127.0.0.1:8000/api/download \
      -H "Content-Type: application/json" \
      -d '{"provider":"netease","id":"5257138","title":"屋顶","quality":"320"}'
+
+# 账号：申请二维码 → 轮询 → 读歌单
+curl -X POST http://127.0.0.1:8000/api/accounts/netease/qr
+curl "http://127.0.0.1:8000/api/accounts/netease/qr/<key>"
+curl "http://127.0.0.1:8000/api/accounts/netease/playlists"
 ```
-
-## 部署到 GitHub Pages
-
-前端是纯静态的（无构建步骤、无 CDN 依赖），可以直接托管到 GitHub Pages。而且**不配任何后端也能搜索和下载**——走的是纯前端直连模式。
-
-### 不配后端能做什么
-
-实测结论（2026-10）：四个平台的**接口**都不带 CORS 头，但**音频 CDN 大多数带 `Access-Control-Allow-Origin: *`**。所以只要能拿到直链，下载这一步在浏览器里是合法的。
-
-| 平台 | 搜索（JSONP） | 拿直链 | 下载 | 说明 |
-| --- | --- | --- | --- | --- |
-| 酷狗 | ✅ | ✅ JSONP | ✅ 完整可用 | 免费曲目直接给完整 mp3（128k） |
-| QQ音乐 | ✅ | ⚠️ 需登录 | ❌ | vkey 匿名返回空 purl |
-| 酷我 | ✅ | ✅ | ❌ | 音频 CDN 不给 CORS |
-| 网易云 | ❌ | ❌ | ❌ | 接口既无 JSONP 也无 CORS |
-
-也就是说，**打开 Pages 页面直接搜「Canon」，酷狗那组的结果点下载就会真的存到你电脑里**，全程没有任何服务器参与。这不是"演示版"，是真能用。
-
-网易云是硬边界：它的接口不返回 JSONP 也不返回 CORS 头，浏览器同源策略下拿不到任何数据。想要网易云、FLAC、封面和歌词标签，必须有一个后端。
-
-### 配后端能多出什么
-
-| 功能 | 纯前端直连 | 配后端 |
-| --- | --- | --- |
-| 搜索 | QQ / 酷狗 / 酷我 | 四平台 |
-| 下载 | 酷狗 | 四平台（受版权限制） |
-| 音质 | 酷狗 128k | 网易云 320k / FLAC |
-| 封面 / 歌词写入标签 | ❌ 浏览器做不到 | ✅ |
-| 歌单 / 专辑展开 | ❌ | ✅ |
-| 文件名模板、下载目录 | ❌ | ✅ |
-
-三种后端方式：
-
-| 方式 | 后端 | 需要什么 | 适合 |
-| --- | --- | --- | --- |
-| A | 本地 `mdl serve` | 自己电脑开着服务 | 自己用，最省事 |
-| B | Cloudflare Worker 中继 | 一个免费 CF 账号 | 想随时随地打开就能用 |
-| C | 任意 VPS / 容器 | 一台服务器 | 长期、多人 |
-
-### 方式 A：本地后端（最快）
-
-```bash
-mdl serve --port 8000
-```
-
-打开 <https://p4rfa1t.github.io/musicdownloader/>，点右上角「⚙ 设置」，填 `http://127.0.0.1:8000`，点「测试连接」看到绿色「已连接」再保存。之后所有请求都会打到本机。
-
-后端已经默认放行了 Pages 域名和本机端口的 CORS，不用额外配置。要放开别的来源：
-
-```bash
-MDL_CORS_ORIGINS="https://your.site,http://192.168.1.10:8000" mdl serve
-```
-
-### 方式 B：Cloudflare Worker 中继（推荐）
-
-`worker/worker.js` 是一个无服务器中继，把四个平台的接口代理出来、补上 CORS，并在服务端完成取直链和下载（音频流直接回传浏览器，不落盘不占存储）。
-
-```bash
-cd worker
-npm i -g wrangler
-wrangler login
-wrangler deploy worker.js --name mdl-relay --compatibility-date 2024-11-01
-```
-
-部署完记下 `https://mdl-relay.<你的子域>.workers.dev`，填进「⚙ 设置」。
-
-免费额度每天 10 万次请求，个人用绰绰有余。想防止别人白嫖，在 Cloudflare 面板给 Worker 加环境变量 `MDL_TOKEN`，之后填地址时带上 `?token=你的令牌`。
-
-中继不支持 `/api/download/batch`（没有持久任务表，返回 501），前端会自动降级成串行逐首下载，任务面板照常显示进度。
-
-### 方式 C：VPS
-
-和方式 A 一样，只是把 `mdl serve` 换成常驻进程，并用 `MDL_CORS_ORIGINS` 放行你的 Pages 域名。
-
-### 自动部署
-
-仓库已配好 `.github/workflows/pages.yml`：推送到 `main` 且改动涉及 `src/mdl/web/**` 时，自动跑 `scripts/build_pages.py` 生成 `docs/` 并发布。
-
-想预置后端地址（这样用户打开就能用，不用自己填）：仓库 Settings → Secrets and variables → Actions → Variables 里加一个 `MDL_API_BASE`，值填你的 Worker 或 VPS 地址。构建时会被注入成 `window.MDL_API_BASE`。
-
-本地预览 Pages 产物：
-
-```bash
-python scripts/build_pages.py            # 生成 docs/
-python -m http.server 8811 -d docs       # 打开 http://127.0.0.1:8811
-```
-
-### 页面上的三种运行状态
-
-页面启动时会先探一次同源的 `/api/health`：
-
-1. 探到了 → 走**后端模式**，能力最全。
-2. 探不到，但有 `direct.js` → 自动切**直连模式**，顶栏版本号显示「直连」，平台状态点变成实心/空心区分可用性，酷狗可搜索可下载。
-3. 配了地址但连不上 → 先尝试直连兜底，同时 toast 提示，设置弹层里可以改地址。
-
-随时可以在「⚙ 设置」里填后端地址切回后端模式，清空即回到直连模式。
 
 ## 项目结构
 
 ```
 src/mdl/
   config.py            配置、Cookie、CORS 来源
-  models.py            Track / StreamInfo / ResolveResult
-  http.py              共享 httpx 客户端，重试与超时
+  models.py            Track / StreamInfo / ResolveResult / AccountInfo / Playlist
+  http.py              共享 httpx 客户端，重试与超时，按平台挂 Cookie
+  accounts.py          账号凭据存储（cookies.json，原子写、脱敏）
+  qr.py                二维码生成（qrcode + Pillow，缺依赖时降级）
   naming.py            文件名与目录模板
   tagger.py            ID3 / MP4 / FLAC 标签写入
   downloader.py        下载引擎 + 批量任务管理
-  server.py            FastAPI 路由
+  server.py            FastAPI 路由（曲目 / 下载 / 账号 / 歌单）
   cli.py               命令行入口
+  entry.py             打包后的程序入口
   providers/
-    base.py            Provider 抽象基类
-    netease.py         网易云
-    qq.py              QQ音乐
-    kugou.py           酷狗
-    kuwo.py            酷我
+    base.py            Provider 抽象基类（含账号与歌单能力声明）
+    netease.py         网易云（扫码登录 + 账号歌单）
+    qq.py              QQ音乐（Cookie 登录 + 账号歌单）
+    kugou.py           酷狗（Cookie + 公开歌单）
+    kuwo.py            酷我（Cookie + 公开歌单）
     __init__.py        Provider 注册表 + 链接自动识别
   web/
-    index.html         单页界面（相对路径引用资源，可静态托管）
+    index.html         单页界面（资源全部相对路径，由后端托管）
     app.css
-    app.js             API_BASE 可配置 + 直连/后端模式切换 + 批量降级
-    direct.js          纯前端直连：JSONP 搜索 + CDN 下载（无后端模式）
+    app.js             搜索 / 解析 / 批量下载 / 任务面板
+    account.js         账号面板：登录、扫码轮询、歌单
+    account.css
 scripts/
-  build_pages.py       生成 docs/ 静态站点
   build_exe.py         编译可执行程序 + 冒烟测试 + 打 zip
 mdl.spec               PyInstaller 配置
-worker/
-  worker.js            Cloudflare Worker 中继
-  wrangler.toml
-docs/                  GitHub Pages 产物（由脚本生成）
 tests/
   test_offline.py      离线单测：链接识别、命名、模型
   test_api.py          API 层测试（桩替换网络）+ CORS + 静态资源
+  test_accounts.py     账号层：凭据存储脱敏、登录/扫码/歌单路由契约
   test_live.py         联网集成测试（pytest -m live）
 ```
 
@@ -320,7 +255,7 @@ tests/
 
 ```bash
 # 离线测试，秒级
-pytest tests/test_offline.py tests/test_api.py -q
+pytest tests/test_offline.py tests/test_api.py tests/test_accounts.py -q
 
 # 联网测试，真实打四个平台
 pytest tests/test_live.py -q -m live
@@ -366,7 +301,7 @@ pip install -e ".[dev]"
 uvicorn mdl.server:app --reload --port 8000
 ```
 
-新增平台：继承 `providers/base.py` 的 `Provider`，实现 `search` / `track_from_id` / `stream`（歌词可选），然后在 `providers/__init__.py` 的 `PROVIDER_CLASSES` 里注册，并在 `_HOST_RULES` 加上域名特征即可。
+新增平台：继承 `providers/base.py` 的 `Provider`，实现 `search` / `track_from_id` / `stream`（歌词、账号、歌单可选），然后在 `providers/__init__.py` 的 `PROVIDER_CLASSES` 里注册，并在 `_HOST_RULES` 加上域名特征即可。账号相关能力有四个类属性声明：`login_modes`（`qr` / `cookie`）、`playlists_supported`、`account_note`、以及可选的 `qr_start` / `qr_poll` 实现。
 
 ## 说明
 

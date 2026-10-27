@@ -40,7 +40,7 @@
 
 ### 方式一：直接用编译好的程序（不需要装 Python）
 
-从 [Releases](https://github.com/P4rfa1t/musicdownloader/releases) 下载 `mdl-1.0.0-win64.zip`，解压后：
+从 [Releases](https://github.com/P4rfa1t/musicdownloader/releases) 下载 [`mdl-1.0.0-win64.zip`](https://github.com/P4rfa1t/musicdownloader/releases/download/v1.0.0/mdl-1.0.0-win64.zip)（20.3 MB），解压后：
 
 ```
 mdl\
@@ -355,7 +355,9 @@ python scripts/build_exe.py
 
 换低版本 Python（3.11–3.13）后 `--onefile` 应该能用，改 `mdl.spec` 里的 `EXE`/`COLLECT` 两段即可。
 
-推 tag 时 GitHub Actions 会自动编译并把 zip 附到 Release，见 `.github/workflows/build-exe.yml`。
+`.github/workflows/build-exe.yml` 是手动触发的 CI 构建（Actions 页面点 Run workflow），产物作为 artifact 上传；勾选 `attach_release` 时会挂到同名 Release。日常发版用本地 `scripts/build_exe.py` 出包，再用 API 上传，避免 CI 和本地产生两份同名产物互相覆盖。
+
+上传 20 MB 的包到 `uploads.github.com` 在这台机器上很慢（实测约 25 KB/s，14 分钟），命令行的 `timeout` 要给够，否则会出现「写超时」而不是真正的失败。
 
 ## 开发
 

@@ -335,6 +335,13 @@
 
   function loadHealth() {
     renderProviderSkeleton();
+    // 静态托管（GitHub Pages 等）且没配后端时，同源根本没有 /api，
+    // 直接给引导比让用户看一个莫名其妙的 404 清楚得多。
+    if (!API_BASE && !isSameOriginBackend()) {
+      applyHealth({ providers: [] });
+      showConnectGuide(new Error('还没有配置后端地址'));
+      return Promise.resolve(null);
+    }
     return api('/api/health').then(function (data) {
       applyHealth(data);
       hideConnectGuide();
@@ -345,6 +352,18 @@
       showConnectGuide(err);
       return null;
     });
+  }
+
+  // 当前页面自己是不是就是后端：本地跑 mdl serve 时成立，静态托管时不成立
+  function isSameOriginBackend() {
+    var host = String(window.location.hostname || '');
+    return (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '[::1]' ||
+      host === '::1' ||
+      host === ''
+    );
   }
 
   /* ------------------------------ 模式识别 ------------------------------ */
@@ -436,8 +455,11 @@
     var empty = $('empty');
     if (!empty) return;
     $('emptyTitle').textContent = '未连接后端';
-    $('emptyText').textContent = '这个页面需要连到一个 MusicDL 后端才能搜索和下载。' +
-      (err && err.message ? '（' + err.message + '）' : '');
+    $('emptyText').textContent =
+      '这个页面只是界面，搜索和下载要连一个 MusicDL 后端。' +
+      '点下面的按钮填地址：本地跑 `mdl serve` 就填 http://127.0.0.1:8000，' +
+      '或者部署 worker/ 里的 Cloudflare 中继。' +
+      (err && err.message ? '（当前：' + err.message + '）' : '');
     empty.hidden = false;
   }
 

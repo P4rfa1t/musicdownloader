@@ -380,3 +380,55 @@ def test_default_account_file_is_project_cookie_json() -> None:
     assert settings.account_file.name == "cookies.json"
     assert not settings.account_file.is_absolute()
     assert Settings().account_file.name == "cookies.json"
+
+# ------------------------------------------------------------------ 真实故障回归
+
+
+class StubFragileProvider(StubAccountProvider):
+    """模拟平台侧五花八门的异常：不能让前端只看到 Internal Server Error。"""
+
+    async def qr_poll(self, key: str) -> dict[str, Any]:
+        raise KeyError("weird-platform-body")
+
+
+async def test_qr_poll_unexpected_error_is_readable_502(acct) -> None:
+    """网易云 803 时同名 Cookie 冲突曾抛 httpx.CookieConflict，前端只能看到 500。
+
+    现在任何意外异常都要变成带原因的 502 JSON。
+    """
+    client, _, _ = acct
+    state.registry.providers["netease"] = StubFragileProvider()
+    async with client as c:
+        r = await c.get("/api/accounts/netease/qr/qr-key-1")
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert "KeyError" in detail and "weird-platform-body" in detail
+
+
+def test_cookie_from_handles_duplicate_names() -> None:
+    """登录成功时网易云给同名 Cookie 发多份（不同域名），items() 会抛 CookieConflict。"""
+    import httpx
+
+    from mdl.providers.netease import _cookie_from
+
+    cookies = httpx.Cookies()
+    cookies.set("MUSIC_A_T", "a-163", domain=".163.com")
+    cookies.set("MUSIC_A_T", "a-music", domain="music.163.com")
+    cookies.set("MUSIC_U", "u-music", domain="music.163.com")
+    cookies.set("MUSIC_R_T", "r-163", domain=".163.com")
+    cookies.set("MUSIC_R_T", "r-music", domain="music.163.com")
+
+    with pytest.raises(httpx.CookieConflict):
+        list(cookies.items())  # 先确认这就是当初炸掉的那一步
+
+    out = _cookie_from(cookies)
+    assert "MUSIC_U=u-music" in out
+    assert out.count("MUSIC_A_T=") == 1
+    assert out.count("MUSIC_R_T=") == 1
+
+
+def test_cookie_from_empty_on_garbage() -> None:
+    from mdl.providers.netease import _cookie_from
+
+    assert _cookie_from(object()) == ""
+    assert _cookie_from(None) == ""

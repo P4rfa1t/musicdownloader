@@ -288,10 +288,13 @@ class NeteaseProvider(Provider):
             params={"key": key, "type": 1},
         )
         try:
-            data = resp.json()
+            raw = resp.json()
         except ValueError:
-            data = {}
-        code = int((data or {}).get("code") or 0)
+            raw = {}
+        # 这个接口被风控拦下时偶尔返回数组或裸字符串，一律当空字典处理，
+        # 否则 .get 抛 AttributeError 一路冒到 500，前端只看到 Internal Server Error
+        data = raw if isinstance(raw, dict) else {}
+        code = _as_int(data.get("code"))
         status, message = {
             800: ("expired", "二维码已过期，请刷新"),
             801: ("wait", "等待扫码"),
@@ -305,7 +308,9 @@ class NeteaseProvider(Provider):
                 out.update(status="error", message="登录成功但没拿到 Cookie，请改用粘贴方式")
                 return out
             # 803 的 body 里也带 profile，直接省一次 account_info
-            prof = (data or {}).get("profile") or {}
+            prof = data.get("profile")
+            if not isinstance(prof, dict):
+                prof = {}
             out["cookie"] = cookie
             out["account"] = AccountInfo(
                 provider=self.name,
@@ -313,7 +318,7 @@ class NeteaseProvider(Provider):
                 nickname=str(prof.get("nickname") or ""),
                 avatar=str(prof.get("avatarUrl") or ""),
                 uid=str(prof.get("userId") or ""),
-                vip=int(prof.get("vipType") or 0) > 0,
+                vip=_as_int(prof.get("vipType")) > 0,
                 level=str(prof.get("level") or ""),
             ).to_dict()
         return out
@@ -417,10 +422,43 @@ def _rank(level: str) -> int:
     return {"128": 0, "192": 1, "320": 2, "flac": 3}.get(level, 0)
 
 
-def _cookie_from(cookies: Any) -> str:
-    """把响应里的 Set-Cookie 拼成请求头用的 Cookie 字符串。"""
+def _as_int(value: Any) -> int:
+    """平台字段有时是字符串、None、甚至嵌套对象，统一转成 int，转不动就 0。"""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
     try:
-        items = list(cookies.items())
-    except AttributeError:
-        return ""
-    return "; ".join(f"{k}={v}" for k, v in items if v)
+        return int(str(value).strip() or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _cookie_from(cookies: Any) -> str:
+    """把响应里的 Set-Cookie 拼成请求头用的 Cookie 字符串。
+
+    不能直接 `cookies.items()`：网易云登录成功时会给同名 Cookie 发多份
+    （`MUSIC_A_T` / `MUSIC_R_T` / `MUSIC_U` 在 `.163.com` 和 `music.163.com`
+    上各一条），httpx 的 Cookies.items() 会抛 CookieConflict。这里直接读
+    cookie jar，同名只留第一条（域名越宽越靠前），拿不到 jar 就退回 items()。
+    """
+    jar = getattr(cookies, "jar", None)
+    pairs: list[tuple[str, str]] = []
+    if jar is not None:
+        try:
+            for c in jar:
+                name = getattr(c, "name", "") or ""
+                value = getattr(c, "value", "") or ""
+                if name and value:
+                    pairs.append((str(name), str(value)))
+        except TypeError:  # jar 不是可迭代对象
+            pairs = []
+    if not pairs:
+        try:
+            pairs = [(str(k), str(v)) for k, v in cookies.items() if k and v]
+        except Exception:  # noqa: BLE001 - 同名冲突时 items() 会抛 CookieConflict
+            return ""
+    seen: dict[str, str] = {}
+    for name, value in pairs:
+        seen.setdefault(name, value)
+    return "; ".join(f"{k}={v}" for k, v in seen.items())

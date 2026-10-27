@@ -166,6 +166,13 @@ async def qualities() -> dict[str, Any]:
 QR_STATUSES = ("wait", "scanned", "ok", "expired", "error")
 
 
+def _exc_detail(exc: BaseException) -> str:
+    """把异常翻成一句用户能看懂的话，带类型名方便排查。"""
+    text = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {text}" if text else name
+
+
 def _provider_or_400(provider: str):
     if provider not in state.registry.providers:
         raise HTTPException(status_code=400, detail=f"不支持的平台: {provider}")
@@ -309,6 +316,9 @@ async def account_qr_start(provider: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PROVIDER_ERRORS as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - 平台侧花样太多，别让前端只看到 500
+        log.exception("申请二维码异常 %s", provider)
+        raise HTTPException(status_code=502, detail=_exc_detail(exc)) from exc
     return {"ok": True, **data}
 
 
@@ -325,6 +335,9 @@ async def account_qr_poll(provider: str, key: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PROVIDER_ERRORS as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - 状态查询必须总能给出可读原因
+        log.exception("扫码状态查询异常 %s", provider)
+        raise HTTPException(status_code=502, detail=_exc_detail(exc)) from exc
 
     status = str(result.get("status") or "wait")
     if status not in QR_STATUSES:

@@ -115,7 +115,8 @@
         <div class="conn-result" id="connResult" hidden></div>
 
         <p class="modal-note">
-          GitHub Pages 版没有后端，需要一个地址。两种方式：① 本地跑 <code>mdl serve</code> 并允许跨域；② 部署 Cloudflare Worker 中继（见 README）。
+          不填也能用：页面会走<b>纯前端直连模式</b>，靠 JSONP 搜索 QQ / 酷狗 / 酷我，其中酷狗可以直接下载。<br />
+          想要<span>网易云</span>、FLAC、封面歌词标签，或酷我的完整曲目，就需要一个后端：① 本地跑 <code>mdl serve</code>（同源，留空即可）；② 部署 <code>worker/</code> 里的 Cloudflare 中继（见 README）。
         </p>
       </div>
 
@@ -131,6 +132,7 @@
   <div class="backdrop" id="backdrop" hidden></div>
   <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
+  <script src="./direct.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

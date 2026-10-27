@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "mdl" / "web"
 OUT = ROOT / "docs"
 
-FILES = ["index.html", "app.css", "app.js"]
+FILES = ["index.html", "app.css", "app.js", "direct.js"]
 
 # 构建产物标记，避免把 docs/ 误当成源码目录
 BANNER = "<!-- 由 scripts/build_pages.py 生成，请改 src/mdl/web/ 下的源文件 -->"

@@ -274,7 +274,9 @@
     pollers: {},
     seq: 0,
     ctrl: null,
-    statusToken: 0
+    statusToken: 0,
+    // 纯前端直连模式：没有后端地址时启用，走 JSONP + CDN
+    direct: false
   };
 
   /* ------------------------------ 顶部平台状态 ------------------------------ */
@@ -335,18 +337,41 @@
 
   function loadHealth() {
     renderProviderSkeleton();
-    // 静态托管（GitHub Pages 等）且没配后端时，同源根本没有 /api，
-    // 直接给引导比让用户看一个莫名其妙的 404 清楚得多。
-    if (!API_BASE && !isSameOriginBackend()) {
-      applyHealth({ providers: [] });
-      showConnectGuide(new Error('还没有配置后端地址'));
-      return Promise.resolve(null);
+
+    // 没有显式配置后端地址时，先探一下同源有没有 /api（本地 mdl serve 就有），
+    // 探不到再退回纯前端直连模式。这样本地预览 Pages 产物也能正常用。
+    if (!API_BASE) {
+      return api('/api/health', { silent: true }).then(function (data) {
+        state.direct = false;
+        applyHealth(data);
+        hideConnectGuide();
+        return data;
+      }).catch(function () {
+        if (!window.MDLDirect) {
+          applyHealth({ providers: [] });
+          showConnectGuide(new Error('还没有配置后端地址'));
+          return null;
+        }
+        state.direct = true;
+        applyDirectHealth();
+        hideConnectGuide();
+        return null;
+      });
     }
+
+    state.direct = false;
     return api('/api/health').then(function (data) {
       applyHealth(data);
       hideConnectGuide();
       return data;
     }).catch(function (err) {
+      // 配了地址但连不上：如果直连模块在，也先让用户能用
+      if (window.MDLDirect) {
+        state.direct = true;
+        applyDirectHealth();
+        toast('后端连不上（' + err.message + '），已切到纯前端直连模式', 'warn');
+        return null;
+      }
       applyHealth({ providers: [] });
       toast('无法连接后端服务：' + err.message, 'error');
       showConnectGuide(err);
@@ -354,16 +379,27 @@
     });
   }
 
-  // 当前页面自己是不是就是后端：本地跑 mdl serve 时成立，静态托管时不成立
-  function isSameOriginBackend() {
-    var host = String(window.location.hostname || '');
-    return (
-      host === 'localhost' ||
-      host === '127.0.0.1' ||
-      host === '[::1]' ||
-      host === '::1' ||
-      host === ''
-    );
+  // 直连模式下没有 /api/health，能力表在前端写死（direct.js 里）
+  function applyDirectHealth() {
+    var caps = (window.MDLDirect && window.MDLDirect.capabilities) || {};
+    var box = $('providers');
+    if (box) {
+      box.textContent = '';
+      ['netease', 'qq', 'kugou', 'kuwo'].forEach(function (name) {
+        var cap = caps[name] || {};
+        var pill = el('span', 'pill' + (cap.search ? ' is-on' : ' is-off'));
+        pill.setAttribute('data-provider', name);
+        pill.title = cap.search
+          ? (cap.download ? PROVIDER_LABEL[name] + ' · 可搜索可下载' : PROVIDER_LABEL[name] + ' · 只可搜索（' + (cap.reason || '') + '）')
+          : PROVIDER_LABEL[name] + ' · 纯前端不可用（' + (cap.reason || '') + '）';
+        pill.appendChild(el('span', 'dot'));
+        pill.appendChild(document.createTextNode(PROVIDER_LABEL[name]));
+        box.appendChild(pill);
+      });
+    }
+    var badgeEl = $('versionBadge');
+    if (badgeEl) badgeEl.textContent = '直连';
+    setStatus('纯前端直连模式：搜索走 JSONP，酷狗可直接下载，其它平台建议配置后端', false);
   }
 
   /* ------------------------------ 模式识别 ------------------------------ */
@@ -456,9 +492,9 @@
     if (!empty) return;
     $('emptyTitle').textContent = '未连接后端';
     $('emptyText').textContent =
-      '这个页面只是界面，搜索和下载要连一个 MusicDL 后端。' +
-      '点下面的按钮填地址：本地跑 `mdl serve` 就填 http://127.0.0.1:8000，' +
-      '或者部署 worker/ 里的 Cloudflare 中继。' +
+      '没有后端也能搜：直连模式会走 JSONP 搜 QQ / 酷狗 / 酷我，酷狗可以直接下载。' +
+      '想要网易云、FLAC 和封面歌词标签，就填一个后端地址——' +
+      '本地跑 mdl serve 填 http://127.0.0.1:8000，或者部署 worker/ 里的 Cloudflare 中继。' +
       (err && err.message ? '（当前：' + err.message + '）' : '');
     empty.hidden = false;
   }
@@ -651,6 +687,27 @@
       cover_url: track.cover_url || '',
       duration_ms: Number(track.duration_ms) || 0
     };
+
+    if (state.direct && window.MDLDirect) {
+      if (!window.MDLDirect.canDownload(track.provider)) {
+        var cap = window.MDLDirect.capabilities[track.provider] || {};
+        setButtonLoading(btn, false);
+        toast(
+          providerLabel(track.provider) + ' 纯前端下载不了：' + (cap.reason || '接口限制') +
+            '。点右上角「⚙ 设置」配一个后端地址即可。',
+          'warn'
+        );
+        return;
+      }
+      window.MDLDirect.download(track, payload.quality).then(function (res) {
+        setButtonDone(btn);
+        toast('已保存：' + res.file + ' · ' + humanSize(res.size) + ' · ' + res.quality, 'ok');
+      }).catch(function (err) {
+        setButtonLoading(btn, false);
+        toast('下载失败：' + err.message, 'error');
+      });
+      return;
+    }
 
     api('/api/download', { method: 'POST', body: payload }).then(function (res) {
       setButtonDone(btn);
@@ -896,6 +953,23 @@
 
     var q = quality || DEFAULT_QUALITY;
 
+    // 直连模式没有批量接口，直接走前端串行
+    if (state.direct) {
+      restoreBtn();
+      var usable = list.filter(function (t) {
+        return window.MDLDirect && window.MDLDirect.canDownload(t.provider);
+      });
+      if (!usable.length) {
+        toast('这批曲目在当前前端模式下都下载不了，配置后端后可用', 'warn');
+        return;
+      }
+      if (usable.length < list.length) {
+        toast('跳过 ' + (list.length - usable.length) + ' 首暂不支持的曲目', 'warn');
+      }
+      runSerialBatch(usable, q);
+      return;
+    }
+
     api('/api/download/batch', {
       method: 'POST',
       body: { quality: q, tracks: list }
@@ -997,19 +1071,24 @@
     job.current = '正在下载 ' + (item.title || '');
     renderJobs();
 
-    api('/api/download', {
-      method: 'POST',
-      body: {
-        provider: track.provider || '',
-        id: String(track.id),
-        quality: job._quality,
-        title: track.title || '',
-        artists: Array.isArray(track.artists) ? track.artists : [],
-        album: track.album || '',
-        cover_url: track.cover_url || '',
-        duration_ms: Number(track.duration_ms) || 0
-      }
-    }).then(function (res) {
+    // 直连模式：前端自己拉 CDN 并保存
+    var runner = state.direct && window.MDLDirect
+      ? window.MDLDirect.download(track, job._quality)
+      : api('/api/download', {
+          method: 'POST',
+          body: {
+            provider: track.provider || '',
+            id: String(track.id),
+            quality: job._quality,
+            title: track.title || '',
+            artists: Array.isArray(track.artists) ? track.artists : [],
+            album: track.album || '',
+            cover_url: track.cover_url || '',
+            duration_ms: Number(track.duration_ms) || 0
+          }
+        });
+
+    runner.then(function (res) {
       item.state = 'done';
       item.file = (res && res.file) || '';
       item.path = (res && res.path) || '';
@@ -1425,6 +1504,20 @@
     setBusy(true);
     setStatus('正在搜索「' + q + '」…', false);
 
+    if (state.direct && window.MDLDirect) {
+      window.MDLDirect.search(q, prov, SEARCH_LIMIT).then(function (data) {
+        renderSearchResult(data);
+      }).catch(function (err) {
+        clearResults();
+        showEmpty('搜索失败', err.message);
+        setStatus('搜索失败：' + err.message, true);
+        toast('搜索失败：' + err.message, 'error');
+      }).then(function () {
+        setBusy(false);
+      });
+      return;
+    }
+
     var url = '/api/search?q=' + encodeURIComponent(q) +
       '&provider=' + encodeURIComponent(prov) +
       '&limit=' + SEARCH_LIMIT;
@@ -1452,6 +1545,20 @@
     renderSkeletons(null);
     setBusy(true);
     setStatus('正在解析链接…', false);
+
+    if (state.direct && window.MDLDirect) {
+      window.MDLDirect.resolve(url).then(function (data) {
+        renderResolve(data);
+      }).catch(function (err) {
+        clearResults();
+        showEmpty('解析失败', err.message);
+        setStatus('解析失败：' + err.message, true);
+        toast('解析失败：' + err.message, 'error');
+      }).then(function () {
+        setBusy(false);
+      });
+      return;
+    }
 
     api('/api/resolve', { method: 'POST', body: { url: url }, signal: signal }).then(function (data) {
       renderResolve(data);
@@ -1686,14 +1793,14 @@
     // ?api= 会覆盖上面的结果并落盘；同时取出 ?q= / ?url= 的待执行动作
     var intent = consumeDeepLink();
 
-    // 健康检查（用最终的 base）
-    loadHealth();
+    // 健康检查决定了 state.direct，深链接的搜索必须等它落定再发，
+    // 否则会拿后端模式的路由去打一个没有后端的站点。
+    loadHealth().then(function () {
+      applyDeepLinkIntent(intent);
+    });
 
     var input = $('q');
     if (input) input.focus();
-
-    // 深链接的搜索/解析放在健康检查之后，避免两批请求互相 abort
-    applyDeepLinkIntent(intent);
   }
 
   if (document.readyState === 'loading') {

@@ -300,6 +300,10 @@ if WEB_DIR.is_dir():
     async def app_js() -> FileResponse:
         return FileResponse(WEB_DIR / "app.js", media_type="text/javascript")
 
+    @app.get("/direct.js")
+    async def direct_js() -> FileResponse:
+        return FileResponse(WEB_DIR / "direct.js", media_type="text/javascript")
+
     @app.get("/favicon.ico")
     async def favicon() -> Response:
         # 内联一个音符图标，省得浏览器每开一次就 404 一条

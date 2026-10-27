@@ -127,6 +127,23 @@ $env:MDL_KUWO_COOKIE="kw_token=xxx"
 mdl serve
 ```
 
+不想开界面也能管账号，`mdl accounts` 就是账号面板的命令行版：
+
+```bash
+# 看四个平台的登录状态（已登录的会顺带报昵称和歌单数）
+mdl accounts
+
+# 存 Cookie：--cookie 直接给，或者省略让它从标准输入读（避免进 shell 历史）
+mdl accounts --set qq --cookie "uin=o123456; qm_keyst=xxxxx"
+mdl accounts --set netease
+
+# 列某个账号的歌单
+mdl accounts --playlists netease
+
+# 退出登录
+mdl accounts --clear qq
+```
+
 ## 支持的链接
 
 | 平台 | 链接形态 | 说明 |

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,24 @@ from .config import settings
 from .downloader import Downloader
 from .http import Http
 from .providers import ALL_PROVIDERS, Registry
+
+
+def fix_console_encoding() -> None:
+    """Windows 控制台默认 GBK 代码页，中文会变乱码。
+
+    切成 65001(UTF-8) 并把标准流设成 UTF-8。`mdl` 命令和打包后的 exe 都走这里。
+    """
+    if os.name != "nt":
+        return
+    try:
+        os.system("chcp 65001 > nul")
+    except Exception:  # noqa: BLE001 - 拿不到控制台就算了，不该拦住主流程
+        pass
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 - 被重定向到管道时没有 reconfigure
+            pass
 
 
 async def _with_stack(coro_factory):
@@ -96,6 +115,98 @@ def cmd_dl(args: argparse.Namespace) -> int:
     return asyncio.run(_with_stack(run))
 
 
+def cmd_accounts(args: argparse.Namespace) -> int:
+    """管理各平台登录凭据，并（可选）列账号歌单。
+
+    凭据存本地 cookies.json，只写不读回，列表里只报长度。
+    """
+    from .accounts import AccountStore, StoreError
+
+    actions = [a for a in (args.set_cookie, args.clear, args.playlists) if a]
+    action = "list" if not actions else ("set" if args.set_cookie else ("clear" if args.clear else "playlists"))
+
+    if action == "set":
+        provider = args.set_cookie
+        cookie = args.cookie or ""
+        if not cookie:
+            print(f"从标准输入读取 {provider} 的 Cookie（结束按 Ctrl-Z 回车）：", file=sys.stderr)
+            cookie = sys.stdin.read()
+        cookie = cookie.strip()
+        if not cookie:
+            print("Cookie 为空，什么都没做", file=sys.stderr)
+            return 1
+        try:
+            AccountStore().set(provider, cookie)
+        except StoreError as exc:
+            print(f"保存失败：{exc}", file=sys.stderr)
+            return 1
+        print(f"[{provider}] 已保存，长度 {len(cookie)}")
+        return 0
+
+    if action == "clear":
+        provider = args.clear
+        try:
+            removed = AccountStore().clear(provider)
+        except StoreError as exc:
+            print(f"清除失败：{exc}", file=sys.stderr)
+            return 1
+        print(f"[{provider}] {'已清除' if removed else '本来就没有凭据'}")
+        return 0
+
+    store = AccountStore()
+    names = [args.playlists] if action == "playlists" else list(ALL_PROVIDERS)
+
+    async def run(registry: Registry, _dl: Downloader):
+        rc = 0
+        for name in names:
+            prov = registry.get(name)
+            label = getattr(prov, "label", "") or name
+            cookie = store.get(name)
+            if action == "playlists":
+                if not cookie:
+                    print(f"[{label}] 未登录，先 `mdl accounts --set {name}` 保存凭据", file=sys.stderr)
+                    return 1
+                try:
+                    playlists = await prov.user_playlists(cookie)
+                except Exception as exc:  # noqa: BLE001 - 单个平台失败不影响其他输出
+                    print(f"[{label}] 读歌单失败：{exc}", file=sys.stderr)
+                    return 1
+                if not playlists:
+                    print(f"[{label}] 没有读到歌单")
+                    continue
+                print(f"[{label}] {len(playlists)} 个歌单")
+                for i, pl in enumerate(playlists, 1):
+                    print(f"{i:>3}  {pl.name[:32]:<34} {pl.track_count:>5} 首  {pl.id}")
+                continue
+
+            # list 模式：未登录直接标未登录，有凭据才联网核实
+            if not cookie:
+                print(f"{label:<8} 未登录（`mdl accounts --set {name}` 添加凭据）")
+                continue
+            try:
+                info = await prov.account_info(cookie)
+            except Exception as exc:  # noqa: BLE001 - 凭据失效就是凭据失效，别中断列表
+                print(f"{label:<8} 凭据无效：{exc}")
+                rc = 1
+                continue
+            if info is None or not info.logged_in:
+                print(f"{label:<8} 凭据未通过验证")
+                rc = 1
+                continue
+            extra = f" VIP {info.level}" if info.vip else ""
+            print(f"{label:<8} 已登录 {info.nickname or info.uid}{extra}")
+            if prov.playlists_supported:
+                try:
+                    playlists = await prov.user_playlists(cookie)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"{'':<8} 歌单读取失败：{exc}")
+                    continue
+                print(f"{'':<8} 歌单 {len(playlists)} 个")
+        return rc
+
+    return asyncio.run(_with_stack(run))
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import threading
     import webbrowser
@@ -134,6 +245,15 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("-q", "--quality", default="320", choices=["128", "192", "320", "flac"])
     d.set_defaults(func=cmd_dl)
 
+    a = sub.add_parser("accounts", help="管理平台登录凭据、查看账号歌单")
+    a.add_argument("--set", dest="set_cookie", metavar="PROVIDER", choices=list(ALL_PROVIDERS),
+                   help="保存某平台的 Cookie（不给 --cookie 就从标准输入读）")
+    a.add_argument("--cookie", help="配合 --set 一起用，避免交互输入")
+    a.add_argument("--clear", metavar="PROVIDER", choices=list(ALL_PROVIDERS), help="清除某平台凭据")
+    a.add_argument("--playlists", metavar="PROVIDER", choices=list(ALL_PROVIDERS),
+                   help="列出该账号的歌单")
+    a.set_defaults(func=cmd_accounts)
+
     v = sub.add_parser("serve", help="启动 Web 界面")
     v.add_argument("--host", default="127.0.0.1")
     v.add_argument("--port", type=int, default=8000)
@@ -144,6 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    fix_console_encoding()
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

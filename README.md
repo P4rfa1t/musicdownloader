@@ -32,7 +32,7 @@
 
 ### 方式一：直接用编译好的程序（不需要装 Python）
 
-从 [Releases](https://github.com/P4rfa1t/musicdownloader/releases/latest) 下载 [`mdl-1.1.0-win64.zip`](https://github.com/P4rfa1t/musicdownloader/releases/download/v1.1.0/mdl-1.1.0-win64.zip)（27.7 MB），解压后：
+从 [Releases](https://github.com/P4rfa1t/musicdownloader/releases/latest) 下载 [`mdl-1.1.1-win64.zip`](https://github.com/P4rfa1t/musicdownloader/releases/download/v1.1.1/mdl-1.1.1-win64.zip)（27.7 MB），解压后：
 
 ```
 mdl\

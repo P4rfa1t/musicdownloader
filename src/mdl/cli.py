@@ -97,9 +97,20 @@ def cmd_dl(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
+    import threading
+    import webbrowser
+
     from .server import run as serve
 
-    serve(host=args.host, port=args.port, reload=args.reload)
+    host = args.host
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    if args.open:
+        url = f"http://{shown}:{args.port}/"
+        # 等 uvicorn 起来再开，1.2s 是个经验值
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+        print(f"服务启动后会自动打开 {url}")
+
+    serve(host=host, port=args.port, reload=args.reload)
     return 0
 
 
@@ -127,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--host", default="127.0.0.1")
     v.add_argument("--port", type=int, default=8000)
     v.add_argument("--reload", action="store_true")
+    v.add_argument("--open", action="store_true", help="启动后自动打开浏览器")
     v.set_defaults(func=cmd_serve)
     return p
 

@@ -38,6 +38,31 @@
 
 ## 快速开始
 
+### 方式一：直接用编译好的程序（不需要装 Python）
+
+从 [Releases](https://github.com/P4rfa1t/musicdownloader/releases) 下载 `mdl-1.0.0-win64.zip`，解压后：
+
+```
+mdl\
+├── mdl.exe          双击即可：起服务 + 自动打开浏览器
+└── _internal\       依赖和前端资源，必须和 exe 放在一起
+```
+
+双击 `mdl.exe` → 浏览器打开 <http://127.0.0.1:8000> → 能搜能下。
+
+也可以当命令行用（在 `mdl\` 目录里开 cmd / PowerShell）：
+
+```bat
+mdl.exe search "晴天 周杰伦"
+mdl.exe dl "https://music.163.com/song?id=5257138"
+mdl.exe serve --port 8080
+mdl.exe --help
+```
+
+整个 `mdl\` 文件夹可以直接拷到别的机器，不需要装 Python 或任何依赖。
+
+### 方式二：从源码跑
+
 ```bash
 git clone <this-repo> musicdownloader
 cd musicdownloader
@@ -279,6 +304,8 @@ src/mdl/
     direct.js          纯前端直连：JSONP 搜索 + CDN 下载（无后端模式）
 scripts/
   build_pages.py       生成 docs/ 静态站点
+  build_exe.py         编译可执行程序 + 冒烟测试 + 打 zip
+mdl.spec               PyInstaller 配置
 worker/
   worker.js            Cloudflare Worker 中继
   wrangler.toml
@@ -298,6 +325,37 @@ pytest tests/test_offline.py tests/test_api.py -q
 # 联网测试，真实打四个平台
 pytest tests/test_live.py -q -m live
 ```
+
+## 编译成可执行文件
+
+后端可以打包成不依赖 Python 的独立程序：
+
+```bash
+pip install pyinstaller
+python scripts/build_exe.py
+```
+
+产物：
+
+| 路径 | 说明 |
+| --- | --- |
+| `dist/mdl/mdl.exe` | 主程序 |
+| `dist/mdl/_internal/` | 依赖 + 前端静态资源（必须一起分发） |
+| `dist/mdl-1.0.0-win64.zip` | 打好的压缩包，20 MB 左右 |
+
+脚本会自动做冒烟测试（跑 `--version`、检查前端资源是否打进包），不合格直接报错退出。
+
+关于「为什么不是单文件 exe」：本机 **Python 3.14.6 + PyInstaller 6.22.3** 的组合下，`--onefile` 的 bootloader 必定报错——
+
+```
+[PYI-xxxx:ERROR] Could not create temporary directory!
+```
+
+用 hello world 最小样例就能复现，`onedir` 完全正常，所以是工具链的坑，不是项目代码的问题。目录模式还有个附带好处：启动不用每次解压到 `%TEMP%`，常驻服务更合适，也不会被杀软反复扫描。
+
+换低版本 Python（3.11–3.13）后 `--onefile` 应该能用，改 `mdl.spec` 里的 `EXE`/`COLLECT` 两段即可。
+
+推 tag 时 GitHub Actions 会自动编译并把 zip 附到 Release，见 `.github/workflows/build-exe.yml`。
 
 ## 开发
 

@@ -1,0 +1,51 @@
+name: Build exe
+
+on:
+  # 只手动触发：打 tag 时由本地 scripts/build_exe.py 出包并挂 Release，
+  # 免得 CI 和本地各产生一份同名产物互相覆盖。
+  workflow_dispatch:
+    inputs:
+      attach_release:
+        description: "把产物附到同名 Release（需要先建好 Release）"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" pyinstaller
+
+      - name: 跑测试
+        run: pytest tests/test_offline.py tests/test_api.py -q
+
+      - name: 编译
+        run: python scripts/build_exe.py
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: mdl-windows
+          path: |
+            dist/mdl-*.zip
+            dist/mdl/mdl.exe
+          if-no-files-found: error
+
+      - name: 附到 Release
+        if: inputs.attach_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/mdl-*.zip

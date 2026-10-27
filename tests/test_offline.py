@@ -248,3 +248,47 @@ def test_direct_capabilities_contract() -> None:
     assert re.search(r"netease:\s*\{\s*search:\s*false", text)
     assert re.search(r"kugou:\s*\{\s*search:\s*true,\s*download:\s*true", text)
     assert re.search(r"qq:\s*\{\s*search:\s*true,\s*download:\s*false", text)
+
+
+# ---------------------------------------------------------------- 打包
+
+
+def test_entry_defaults_to_serve() -> None:
+    """双击 exe（无参数）应该起服务并开浏览器，而不是报错退出。"""
+    import mdl.entry as entry
+
+    captured = {}
+
+    def fake_main(argv):
+        captured["argv"] = argv
+        return 0
+
+    orig = entry.cli_main
+    entry.cli_main = fake_main
+    try:
+        entry.main([])
+    finally:
+        entry.cli_main = orig
+    assert captured["argv"] == ["serve", "--open"]
+
+
+def test_entry_passes_args_through() -> None:
+    import mdl.entry as entry
+
+    captured = {}
+    orig = entry.cli_main
+    entry.cli_main = lambda argv: captured.setdefault("argv", argv) and 0
+    try:
+        entry.main(["search", "晴天"])
+    finally:
+        entry.cli_main = orig
+    assert captured["argv"] == ["search", "晴天"]
+
+
+def test_spec_declares_datas_and_hidden_imports() -> None:
+    """spec 必须带上前端资源，否则 exe 起来只有 404。"""
+    root = Path(__file__).resolve().parents[1]
+    spec = (root / "mdl.spec").read_text(encoding="utf-8")
+    assert "mdl/web" in spec
+    assert "uvicorn.protocols.http.h11_impl" in spec
+    assert "COLLECT" in spec  # 目录模式

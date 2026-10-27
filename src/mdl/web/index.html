@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>MusicDL · 本地音乐下载器</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 17.4V6.2l9-1.9v11.2" />
+            <circle cx="6.6" cy="17.6" r="2.4" />
+            <circle cx="15.6" cy="15.5" r="2.4" />
+          </svg>
+        </span>
+        <span class="brand-name">MusicDL</span>
+        <span class="brand-version" id="versionBadge">v—</span>
+      </div>
+
+      <div class="providers" id="providers" aria-label="平台状态"></div>
+
+      <div class="topbar-right">
+        <button class="ghost-btn jobs-toggle" id="jobsToggle" type="button">任务面板</button>
+      </div>
+    </header>
+
+    <div class="body">
+      <main class="main">
+        <section class="hero">
+          <h1 class="hero-title">搜歌，然后下载到本地</h1>
+          <p class="hero-sub">网易云 · QQ音乐 · 酷狗 · 酷我，四个平台一起搜。粘贴歌单或专辑链接可以直接解析。</p>
+
+          <form class="searchbar" id="searchForm" autocomplete="off">
+            <label class="search-field" for="q">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.4" />
+                <path d="M16 16l4.2 4.2" />
+              </svg>
+              <input id="q" name="q" type="text" spellcheck="false"
+                     placeholder="搜索歌曲 / 歌手，或粘贴分享链接" />
+              <span class="mode-chip" id="modeChip" hidden>解析</span>
+            </label>
+
+            <select id="provider" class="provider-select" aria-label="搜索平台">
+              <option value="all">全部平台</option>
+              <option value="netease">网易云</option>
+              <option value="qq">QQ音乐</option>
+              <option value="kugou">酷狗</option>
+              <option value="kuwo">酷我</option>
+            </select>
+
+            <button class="primary-btn search-btn" id="searchBtn" type="submit">搜索</button>
+          </form>
+
+          <p class="hero-hint">按 <kbd>/</kbd> 聚焦搜索框 · 输入纯数字 ID 或链接会自动切换为解析模式</p>
+        </section>
+
+        <div class="status-bar" id="statusBar" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span id="statusText">正在处理…</span>
+        </div>
+
+        <section class="results" id="results" aria-live="polite"></section>
+
+        <section class="empty" id="empty">
+          <div class="empty-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 17.4V6.2l9-1.9v11.2" />
+              <circle cx="6.6" cy="17.6" r="2.4" />
+              <circle cx="15.6" cy="15.5" r="2.4" />
+            </svg>
+          </div>
+          <h2 id="emptyTitle">还没有内容</h2>
+          <p id="emptyText">在上方搜索一首歌，或粘贴一条网易云 / QQ音乐的歌单链接开始。</p>
+        </section>
+      </main>
+
+      <aside class="jobs" id="jobsPanel" aria-label="下载任务">
+        <div class="jobs-head">
+          <h2>下载任务</h2>
+          <button class="icon-btn" id="jobsClose" type="button" aria-label="收起任务面板">×</button>
+        </div>
+        <div class="jobs-list" id="jobsList"></div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="backdrop" id="backdrop" hidden></div>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

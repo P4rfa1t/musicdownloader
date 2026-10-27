@@ -164,8 +164,8 @@ def test_pick_quality(available: dict[str, bool], wanted: str, expected: str) ->
 # ---------------------------------------------------------------- 打包
 
 
-def test_entry_defaults_to_serve() -> None:
-    """双击 exe（无参数）应该起服务并开浏览器，而不是报错退出。"""
+def test_entry_defaults_to_app_window() -> None:
+    """双击 exe（无参数）应该起服务并开应用窗口，而不是丢一个浏览器标签出去。"""
     import mdl.entry as entry
 
     captured = {}
@@ -180,7 +180,7 @@ def test_entry_defaults_to_serve() -> None:
         entry.main([])
     finally:
         entry.cli_main = orig
-    assert captured["argv"] == ["serve", "--open"]
+    assert captured["argv"] == ["app"]
 
 
 def test_entry_passes_args_through() -> None:

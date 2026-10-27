@@ -10,6 +10,8 @@
  *   POST /api/download/batch     {quality,tracks[]}
  *   GET  /api/jobs/{job_id}
  *   GET  /api/file?path=<相对路径>
+ *   POST /api/play/prepare      {provider,id,quality,...}  → 播放令牌
+ *   GET  /api/play/{token}      同源音频流（支持 Range）
  * ========================================================================== */
 
 (function () {
@@ -87,6 +89,9 @@
     'M6.6 20a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z',
     'M15.6 17.9a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z'
   ];
+
+  // 播放三角：实心，才不至于跟音符图标糊成一团
+  var PLAY_PATHS = ['M8 5.5v13l11-6.5-11-6.5z'];
 
   function providerLabel(id) {
     return PROVIDER_LABEL[id] || id || '未知平台';
@@ -265,6 +270,9 @@
   }
 
   /* ------------------------------ 状态 ------------------------------ */
+
+  // ?play= 深链接：解析完自动播第一首
+  var pendingAutoPlay = false;
 
   var state = {
     busy: false,
@@ -558,9 +566,33 @@
     return btn;
   }
 
-  function makeTrackRow(track, index) {
+  function makePlayButton(track, queue) {
+    var btn = el('button', 'play-btn');
+    btn.type = 'button';
+    btn.title = '播放';
+    btn.setAttribute('aria-label', '播放 ' + (track.title || ''));
+    btn.appendChild(svgIcon(PLAY_PATHS));
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (!window.MDLPlayer) {
+        toast('播放器没加载成功，刷新页面试试', 'error');
+        return;
+      }
+      // 已经在放这首 → 当作播放/暂停开关，别让用户为了暂停去够底下的条
+      var cur = window.MDLPlayer.current && window.MDLPlayer.current();
+      if (cur && cur.provider === track.provider && String(cur.id) === String(track.id)) {
+        window.MDLPlayer.toggle();
+        return;
+      }
+      window.MDLPlayer.play(track, queue);
+    });
+    return btn;
+  }
+
+  function makeTrackRow(track, index, queue) {
     var row = el('div', 'track');
     row.setAttribute('data-provider', track.provider || '');
+    row.setAttribute('data-play-key', String(track.provider || '') + ':' + String(track.id || ''));
 
     row.appendChild(el('span', 'track-index', String(index + 1)));
     row.appendChild(makeCover(track.cover_url, false));
@@ -583,6 +615,7 @@
     row.appendChild(el('span', 'track-dur', durationText(track)));
 
     var actions = el('div', 'track-actions');
+    actions.appendChild(makePlayButton(track, queue || []));
     var sel = makeQualitySelect(track, index);
     actions.appendChild(sel);
     actions.appendChild(makeDownloadButton(track, sel, index));
@@ -735,7 +768,7 @@
     if (tracks.length) {
       var list = el('div', 'tracks');
       tracks.forEach(function (t, i) {
-        list.appendChild(makeTrackRow(t, i));
+        list.appendChild(makeTrackRow(t, i, tracks));
       });
       wrap.appendChild(list);
     }
@@ -788,6 +821,12 @@
     state.resolved = data;
 
     var tracks = (data && Array.isArray(data.tracks)) ? data.tracks : [];
+    if (pendingAutoPlay && tracks.length && window.MDLPlayer) {
+      pendingAutoPlay = false;
+      window.MDLPlayer.play(tracks[0], tracks);
+    } else {
+      pendingAutoPlay = false;
+    }
     var kind = KIND_LABEL[data && data.kind] || '内容';
 
     var card = el('div', 'resolve-card');
@@ -838,7 +877,7 @@
     if (tracks.length) {
       var list = el('div', 'tracks resolve-tracks');
       tracks.forEach(function (t, i) {
-        list.appendChild(makeTrackRow(t, i));
+        list.appendChild(makeTrackRow(t, i, tracks));
       });
       card.appendChild(list);
     }
@@ -1608,7 +1647,7 @@
   // ?api= 会先写入 localStorage 并切到新的 API_BASE，然后才清 query，
   // 这样刷新不会重放、也不会丢配置。返回本次要执行的动作（可能为空）。
   function consumeDeepLink() {
-    var intent = { q: '', url: '', provider: '' };
+    var intent = { q: '', url: '', provider: '', play: '' };
     var loc = window.location;
     if (!loc || !loc.search) return intent;
 
@@ -1623,8 +1662,9 @@
     var rawUrl = (params.get('url') || '').trim();
     var rawQ = (params.get('q') || '').trim();
     var rawProvider = (params.get('provider') || '').trim();
+    var rawPlay = (params.get('play') || '').trim();
 
-    if (!rawApi && !rawUrl && !rawQ) return intent;
+    if (!rawApi && !rawUrl && !rawQ && !rawPlay) return intent;
 
     // 1) 先持久化 API base（即使后面清 URL 失败也已经生效）
     if (rawApi) {
@@ -1646,7 +1686,9 @@
     } catch (e) { /* file:// 或沙箱下可能受限，忽略 */ }
 
     // 3) 记录要执行的动作，由 init 在健康检查之后触发
-    if (rawUrl) {
+    if (rawPlay) {
+      intent.play = rawPlay;
+    } else if (rawUrl) {
       intent.url = rawUrl;
     } else if (rawQ) {
       intent.q = rawQ;
@@ -1659,6 +1701,15 @@
     if (!intent) return;
     var input = $('q');
     var provSel = $('provider');
+
+    // ?play=<链接>：解析完直接播第一首，省得再点一下
+    if (intent.play) {
+      pendingAutoPlay = true;
+      if (input) input.value = intent.play;
+      syncModeChip();
+      runResolve(intent.play);
+      return;
+    }
 
     if (intent.url) {
       if (input) input.value = intent.url;
@@ -1704,8 +1755,41 @@
       window.MDLAccount.init({ onPlaylistLoaded: onPlaylistLoaded });
     }
 
+    // 播放器（player.js）同上：只把 API 前缀、提示条和下载动作接过去
+    if (window.MDLPlayer && window.MDLPlayer.hooks) {
+      window.MDLPlayer.hooks.apiUrl = apiUrl;
+      window.MDLPlayer.hooks.toast = toast;
+      window.MDLPlayer.hooks.onDownload = function (track) {
+        if (!track) return;
+        var quality = DEFAULT_QUALITY;
+        downloadOne(track, quality, null);
+      };
+    }
+
+    startHeartbeat();
+
     var input = $('q');
     if (input) input.focus();
+  }
+
+  /* ---------------------------- 窗口存活心跳 ---------------------------- */
+
+  // 桌面模式（mdl app）下后端靠这个判断窗口还在不在：页面一关，
+  // 心跳就停，进程在 idle 超时后自己退出，不会留下后台幽灵服务。
+  function startHeartbeat() {
+    var PERIOD = 5000;
+    var timer = null;
+
+    function beat() {
+      // 窗口关掉后这里会抛错，没人听，也无所谓
+      fetch(apiUrl('/api/ping'), { cache: 'no-store' }).catch(function () {});
+    }
+
+    beat();
+    timer = setInterval(beat, PERIOD);
+    window.addEventListener('pagehide', function () {
+      if (timer) clearInterval(timer);
+    });
   }
 
   if (document.readyState === 'loading') {

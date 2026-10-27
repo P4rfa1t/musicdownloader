@@ -2,13 +2,11 @@
 
 多平台音乐解析下载器 —— 粘贴一条歌曲 / 歌单 / 专辑链接，解析出曲目并下载到本地，自动写入封面与歌词标签。
 
-支持 **网易云音乐 · QQ音乐 · 酷狗音乐 · 酷我音乐** 四个平台，带 Web 界面和命令行两套入口。Web 界面由后端自己托管，打开就是完整功能，不需要额外部署前端。
+支持 **网易云音乐 · QQ音乐 · 酷狗音乐 · 酷我音乐** 四个平台，带桌面窗口、Web 界面、命令行三套入口。界面由后端自己托管，打开就是完整功能，不需要额外部署前端；歌曲可以边听边下，不用先去别处试听。
 
-![搜索界面](screenshots/main.png)
+界面：搜索、解析、下载任务，底部是内建播放条（点曲目行的 ▶ 即可播放，支持拖动进度、上一首/下一首、音量记忆）：
 
-账号面板 —— 扫码登录网易云，登录后直接读账号歌单：
-
-![账号面板](screenshots/account.png)
+![界面](assets/screenshot-player.png)
 
 ```
 ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
@@ -32,15 +30,15 @@
 
 ### 方式一：直接用编译好的程序（不需要装 Python）
 
-从 [Releases](https://github.com/P4rfa1t/musicdownloader/releases/latest) 下载 [`mdl-1.1.1-win64.zip`](https://github.com/P4rfa1t/musicdownloader/releases/download/v1.1.1/mdl-1.1.1-win64.zip)（27.7 MB），解压后：
+从 [Releases](https://github.com/P4rfa1t/musicdownloader/releases/latest) 下载 [`mdl-1.2.0-win64.zip`](https://github.com/P4rfa1t/musicdownloader/releases/download/v1.2.0/mdl-1.2.0-win64.zip)，解压后：
 
 ```
 mdl\
-├── mdl.exe          双击即可：起服务 + 自动打开浏览器
+├── mdl.exe          双击即可：起服务 + 打开应用窗口
 └── _internal\       依赖和前端资源，必须和 exe 放在一起
 ```
 
-双击 `mdl.exe` → 浏览器打开 <http://127.0.0.1:8000> → 能搜能下。
+双击 `mdl.exe`，直接弹出一个没有地址栏的应用窗口（走系统自带 Chrome / Edge 的 `--app` 模式，独立 profile，跟日常浏览器互不干扰）。关掉窗口，后台服务自己退出，不留幽灵进程。
 
 也可以当命令行用（在 `mdl\` 目录里开 cmd / PowerShell）：
 
@@ -89,6 +87,45 @@ mdl dl -p netease -i 5257138 -q 320
 # 关键词直接下第一条
 mdl dl -p kugou -k "Canon 钢琴" -q 128
 ```
+
+## 桌面窗口模式
+
+```bash
+mdl app                     # 起服务 + 弹一个应用窗口
+mdl app --port 8080         # 指定端口（默认从 8000 起自动找空位）
+mdl app --no-window         # 只起服务，不开窗口
+mdl app --idle-timeout 120  # 窗口关闭后多久退出（秒）
+```
+
+窗口走系统自带 Chrome / Edge 的 `--app` 模式，是一个没有地址栏、没有标签页、独立任务栏图标的独立窗口，用的是自己的 profile 目录，和你日常浏览器的登录态、扩展完全隔离。
+
+三个实现细节值得知道：
+
+- **不引入 Electron / Tauri**：外壳直接复用系统已有的 Chromium 内核，安装包只多几十 KB，不需要 Node、Rust 工具链。
+- **关窗即退出靠心跳**：页面每 5 秒打一次 `GET /api/ping`，超过 `--idle-timeout` 没有心跳就认为窗口关了，主动停掉服务。不用进程 PID 判断——Chromium 的启动进程经常立刻退出，PID 不可靠。
+- **受限环境自动降级**：容器、被策略收紧令牌的父进程里 Chromium 自带沙箱起不来（进程带 `STATUS_BREAKPOINT` 立刻退出），此时会自动用 `--no-sandbox` 重启一次；再不行就退回系统默认浏览器打开，不会出现「双击没反应」。
+
+数据目录（日志 `mdl.log`、窗口 profile）优先放 `%APPDATA%\MusicDL`，写不进去就依次退到程序目录 / 当前目录 / 临时目录。
+
+## 在线播放
+
+界面上每行曲目都有 ▶，点一下底部就出现播放条：封面、标题、歌手、上一首 / 播放暂停 / 下一首、进度条（可拖动 seek）、音量（记住上次的值）、下载键。支持键盘空格播放暂停、左右方向键快进快退，也接入了系统媒体键（`MediaSession`）。放完自动播队列里的下一首。
+
+深链接直接播：
+
+```
+http://127.0.0.1:8000/?play=https://music.163.com/song?id=5257138
+http://127.0.0.1:8000/?q=晴天          # 只搜索
+http://127.0.0.1:8000/?url=<歌单链接>   # 只解析
+```
+
+播放为什么不让 `<audio>` 直接吃 CDN 直链，而是走后端代理 `/api/play/{token}`：
+
+- 直链带防盗链头（Referer / Cookie），浏览器发的是本站 Referer，命中不了；
+- 直链有有效期，播放中途失效时前端无法换链，代理层可以透明重取；
+- 部分 CDN 不带 CORS 头，同源代理之后拖动进度条才不会报错。
+
+代理会透传 `Range` / `Content-Range`，所以 seek 可用；账号 Cookie 不会转发给第三方 CDN。播放令牌有效期 30 分钟，直链缓存 4 分钟。
 
 ## 账号登录与歌单
 
@@ -162,7 +199,7 @@ mdl accounts --clear qq
 
 ## 功能
 
-搜索聚合四平台、链接解析（单曲 / 歌单 / 专辑）、账号登录与歌单读取、批量下载（并发 + 任务进度）、音质选择（128 / 192 / 320 / FLAC）、ID3 标签写入（标题 / 歌手 / 专辑 / 封面 / 歌词）、歌词 LRC 文件、文件名模板、下载目录模板、断点重试、Windows 非法字符清洗、同名文件自动去重。
+搜索聚合四平台、链接解析（单曲 / 歌单 / 专辑）、**在线播放（底部播放条 + 上一首/下一首 + 拖动进度 + 音量）**、账号登录与歌单读取、批量下载（并发 + 任务进度）、音质选择（128 / 192 / 320 / FLAC）、ID3 标签写入（标题 / 歌手 / 专辑 / 封面 / 歌词）、歌词 LRC 文件、文件名模板、下载目录模板、断点重试、Windows 非法字符清洗、同名文件自动去重。
 
 ## 音质与版权
 
@@ -214,6 +251,9 @@ mdl accounts --clear qq
 | GET | `/api/accounts/{platform}/qr/{key}` | 轮询扫码状态（wait / scanned / ok / expired） |
 | GET | `/api/accounts/{platform}/playlists` | 当前账号的歌单 |
 | GET | `/api/playlists/{platform}/{id}` | 公开歌单曲目 |
+| POST | `/api/play/prepare` | 准备播放：解析直链并签发短期播放令牌 |
+| GET | `/api/play/{token}` | 音频流代理（支持 `Range`，可拖动进度条） |
+| GET | `/api/ping` | 窗口心跳，桌面模式靠它判断窗口是否还开着 |
 
 ```bash
 curl "http://127.0.0.1:8000/api/search?q=晴天&provider=netease&limit=5"
@@ -223,6 +263,12 @@ curl -X POST http://127.0.0.1:8000/api/resolve \
 curl -X POST http://127.0.0.1:8000/api/download \
      -H "Content-Type: application/json" \
      -d '{"provider":"netease","id":"5257138","title":"屋顶","quality":"320"}'
+
+# 播放：先换令牌，再拿令牌取流（可以带 Range 只取一段）
+curl -X POST http://127.0.0.1:8000/api/play/prepare \
+     -H "Content-Type: application/json" \
+     -d '{"provider":"netease","id":"5257138","title":"屋顶","quality":"320"}'
+curl -H "Range: bytes=0-262143" "http://127.0.0.1:8000/api/play/<token>" -o head.mp3
 
 # 账号：申请二维码 → 轮询 → 读歌单
 curl -X POST http://127.0.0.1:8000/api/accounts/netease/qr
@@ -242,7 +288,9 @@ src/mdl/
   naming.py            文件名与目录模板
   tagger.py            ID3 / MP4 / FLAC 标签写入
   downloader.py        下载引擎 + 批量任务管理
-  server.py            FastAPI 路由（曲目 / 下载 / 账号 / 歌单）
+  player.py            播放：直链缓存 + 短期令牌 + 支持 Range 的流式代理
+  app_window.py        窗口模式：起服务、开应用窗口、心跳判活后自动退出
+  server.py            FastAPI 路由（曲目 / 下载 / 播放 / 账号 / 歌单）
   cli.py               命令行入口
   entry.py             打包后的程序入口
   providers/
@@ -258,6 +306,8 @@ src/mdl/
     app.js             搜索 / 解析 / 批量下载 / 任务面板
     account.js         账号面板：登录、扫码轮询、歌单
     account.css
+    player.js          底部播放条：队列、进度、音量、媒体键
+    player.css
 scripts/
   build_exe.py         编译可执行程序 + 冒烟测试 + 打 zip
 mdl.spec               PyInstaller 配置
@@ -265,6 +315,7 @@ tests/
   test_offline.py      离线单测：链接识别、命名、模型
   test_api.py          API 层测试（桩替换网络）+ CORS + 静态资源
   test_accounts.py     账号层：凭据存储脱敏、登录/扫码/歌单路由契约
+  test_player.py       播放链路：令牌、直链缓存、Range 透传、心跳
   test_live.py         联网集成测试（pytest -m live）
 ```
 
@@ -272,7 +323,7 @@ tests/
 
 ```bash
 # 离线测试，秒级
-pytest tests/test_offline.py tests/test_api.py tests/test_accounts.py -q
+pytest tests/test_offline.py tests/test_api.py tests/test_accounts.py tests/test_player.py -q
 
 # 联网测试，真实打四个平台
 pytest tests/test_live.py -q -m live
@@ -293,9 +344,9 @@ python scripts/build_exe.py
 | --- | --- |
 | `dist/mdl/mdl.exe` | 主程序 |
 | `dist/mdl/_internal/` | 依赖 + 前端静态资源（必须一起分发） |
-| `dist/mdl-1.0.0-win64.zip` | 打好的压缩包，20 MB 左右 |
+| `dist/mdl-1.2.0-win64.zip` | 打好的压缩包，28 MB 左右 |
 
-脚本会自动做冒烟测试（跑 `--version`、检查前端资源是否打进包），不合格直接报错退出。
+脚本会自动做冒烟测试（跑 `--version`、检查前端资源是否打进包、真起一次 `serve` 打 `/api/health` `/api/ping` 和播放器静态资源），不合格直接报错退出。
 
 关于「为什么不是单文件 exe」：本机 **Python 3.14.6 + PyInstaller 6.22.3** 的组合下，`--onefile` 的 bootloader 必定报错——
 

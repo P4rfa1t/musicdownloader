@@ -47,6 +47,8 @@ hiddenimports = [
     "sniffio",
     "click",
     "certifi",
+    "mdl.player",
+    "mdl.app_window",
 ]
 
 datas = [(str(WEB), "mdl/web")]
@@ -88,7 +90,8 @@ exe = EXE(  # noqa: F821
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,  # UPX 容易被杀软误报
-    console=True,  # 服务端程序，保留控制台看日志
+    # 双击就是一个窗口应用，不留黑框；日志写在 %APPDATA%\MusicDL\mdl.log
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

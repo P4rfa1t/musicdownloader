@@ -14,9 +14,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
+import time
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -67,10 +70,45 @@ def smoke_test(exe: Path) -> None:
 
     # 静态资源必须打进去，否则 exe 起来只有 404
     internal = DIST / "_internal" / "mdl" / "web"
-    for name in ("index.html", "app.js", "app.css", "account.js", "account.css"):
+    for name in ("index.html", "app.js", "app.css", "account.js", "account.css",
+                 "player.js", "player.css"):
         if not (internal / name).is_file():
             raise SystemExit(f"缺少前端资源: {internal / name}")
     print(f"  -> 前端资源完整（{len(list(internal.glob('*')))} 个文件）")
+
+    # 真起一次服务，确认路由与播放模块都在（打包漏 hiddenimport 时这里会崩）
+    print("冒烟测试: serve /api/health + /api/ping + /player.js")
+    port = 8847
+    proc = subprocess.Popen(
+        [str(exe), "serve", "--port", str(port), "--host", "127.0.0.1"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    try:
+        deadline = time.time() + 60
+        ok = False
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1) as r:
+                    if json.loads(r.read().decode("utf-8")).get("ok"):
+                        ok = True
+                        break
+            except Exception:
+                time.sleep(0.3)
+        if not ok:
+            raise SystemExit("exe 起服务失败（/api/health 不通）")
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ping", timeout=5) as r:
+            assert json.loads(r.read().decode("utf-8"))["ok"] is True
+        for asset in ("player.js", "player.css"):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/{asset}", timeout=5) as r:
+                if r.status != 200 or not r.read():
+                    raise SystemExit(f"静态资源有问题: {asset}")
+        print("  -> 服务、心跳、播放器资源全部正常")
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def make_zip(version: str) -> Path:
@@ -106,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_zip:
         zpath = make_zip(__version__)
         print(f"压缩包: {zpath} ({zpath.stat().st_size / 1048576:.1f} MB)")
-    print("\n用法: 双击 mdl.exe 直接起服务并打开浏览器；或 mdl.exe search/dl 当命令行用。")
+    print("\n用法: 双击 mdl.exe 就是一个窗口应用；或用 mdl.exe search/dl/serve 当命令行用。")
     return 0
 
 

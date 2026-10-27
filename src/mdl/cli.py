@@ -225,6 +225,38 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_app(args: argparse.Namespace) -> int:
+    """窗口模式：起服务 + 开一个无地址栏的应用窗口，关窗即退出。"""
+    import logging
+
+    from .app_window import data_dir, run_and_exit
+
+    _setup_file_logging(data_dir() / "mdl.log")
+    return run_and_exit(
+        host=args.host,
+        port=args.port,
+        open_window=not args.no_window,
+        idle_timeout=args.idle_timeout,
+    )
+
+
+def _setup_file_logging(path: Path) -> None:
+    """窗口模式看不到控制台，日志统一落文件，出问题时能翻。"""
+    import logging
+    from logging.handlers import RotatingFileHandler
+
+    root = logging.getLogger()
+    if any(isinstance(h, RotatingFileHandler) for h in root.handlers):
+        return
+    root.setLevel(logging.INFO)
+    try:
+        handler = RotatingFileHandler(path, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8")
+    except OSError:
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(handler)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mdl", description="MusicDL —— 多平台音乐解析下载器")
     p.add_argument("-V", "--version", action="version", version=f"mdl {__version__}")
@@ -260,6 +292,14 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--reload", action="store_true")
     v.add_argument("--open", action="store_true", help="启动后自动打开浏览器")
     v.set_defaults(func=cmd_serve)
+
+    w = sub.add_parser("app", help="以桌面窗口模式启动（双击 exe 的默认行为）")
+    w.add_argument("--host", default="127.0.0.1")
+    w.add_argument("--port", type=int, default=0, help="0 表示从 8000 起自动挑空闲端口")
+    w.add_argument("--no-window", action="store_true", help="只起服务，不开窗口")
+    w.add_argument("--idle-timeout", type=float, default=45.0,
+                   help="页面多久没有心跳就认为窗口已关（秒）")
+    w.set_defaults(func=cmd_app)
     return p
 
 

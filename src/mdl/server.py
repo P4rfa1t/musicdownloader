@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -20,6 +21,7 @@ from .config import cors_origins, settings
 from .downloader import Downloader, JobManager
 from .http import Http, HttpError
 from .models import QUALITIES, AccountInfo, Track
+from .player import PlayService, proxy
 from .providers import ALL_PROVIDERS, Registry
 from .providers.base import AccountError, StreamUnavailable
 
@@ -37,9 +39,41 @@ class AppState:
     downloader: Downloader
     jobs: JobManager
     accounts: AccountStore
+    play: PlayService
 
 
 state = AppState()
+
+
+class Heartbeat:
+    """窗口模式用的活性信号。
+
+    页面每 5 秒打一次 /api/ping；把最后一次心跳时间记下来，`mdl app` 就能判断
+    窗口是不是已经关了——比盯浏览器进程 PID 可靠得多（Chromium 的启动进程常常
+    立刻退出，实际渲染进程另算）。
+    """
+
+    def __init__(self) -> None:
+        self._last = 0.0
+        # 进程启动时刻：窗口模式用它给「还没连上」留宽限
+        self.started_at = time.monotonic()
+
+    def ping(self) -> None:
+        self._last = time.monotonic()
+
+    def alive(self) -> bool:
+        return self._last > 0.0
+
+    def never_pinged(self) -> bool:
+        return self._last <= 0.0
+
+    def idle(self) -> float:
+        if self._last <= 0.0:
+            return 0.0
+        return time.monotonic() - self._last
+
+
+heartbeat = Heartbeat()
 
 
 @asynccontextmanager
@@ -60,6 +94,7 @@ async def lifespan(app: FastAPI):
     state.registry = Registry(http)
     state.downloader = Downloader(state.registry, http)
     state.jobs = JobManager(state.downloader)
+    state.play = PlayService(state.registry, http)
     log.info("MusicDL 就绪，下载目录 %s", Path(settings.download_dir).resolve())
     if store.all():
         log.info("已载入账号凭据：%s", ", ".join(sorted(store.all())))
@@ -149,6 +184,13 @@ async def health() -> dict[str, Any]:
 @app.get("/api/qualities")
 async def qualities() -> dict[str, Any]:
     return {"qualities": QUALITIES, "default": "320"}
+
+
+@app.get("/api/ping")
+async def ping() -> dict[str, Any]:
+    """前端心跳：窗口模式靠它判断页面是否还在，普通 serve 模式下无害。"""
+    heartbeat.ping()
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ 账号
@@ -487,23 +529,33 @@ def _check_quality(quality: str) -> str:
     return quality
 
 
+async def _enrich(track: Track) -> Track:
+    """前端只传了搜索结果的部分字段时，回查一次详情补齐时长/封面。
+
+    播放和下载都靠它：酷我用时长估算是否试听片段，缺时长就判不出来。
+    """
+    if track.duration_ms and track.cover_url:
+        return track
+    try:
+        full = await state.registry.get(track.provider).track_from_id(track.id)
+    except Exception:  # noqa: BLE001 - 补全失败不该拦住主流程
+        return track
+    track.duration_ms = track.duration_ms or full.duration_ms
+    track.cover_url = track.cover_url or full.cover_url
+    track.album = track.album or full.album
+    track.artists = track.artists or full.artists
+    track.title = track.title or full.title
+    track.extra = {**full.extra, **track.extra}
+    return track
+
+
 @app.post("/api/download")
 async def download(body: DownloadBody) -> dict[str, Any]:
     _check_quality(body.quality)
     if body.provider not in state.registry.providers:
         raise HTTPException(status_code=400, detail=f"不支持的平台: {body.provider}")
     track = body.to_track()
-    if not track.duration_ms or not track.cover_url:
-        # 前端传来的可能是搜索结果，字段已够；缺失时才回查详情
-        try:
-            full = await state.registry.get(track.provider).track_from_id(track.id)
-            track.duration_ms = track.duration_ms or full.duration_ms
-            track.cover_url = track.cover_url or full.cover_url
-            track.album = track.album or full.album
-            track.artists = track.artists or full.artists
-            track.extra = {**full.extra, **track.extra}
-        except Exception:
-            pass
+    await _enrich(track)
 
     result = await state.downloader.download(track, body.quality)
     if not result.ok:
@@ -535,6 +587,41 @@ async def job_detail(job_id: str) -> dict[str, Any]:
 async def job_list() -> dict[str, Any]:
     jobs = sorted(state.jobs.jobs.values(), key=lambda j: j.created_at, reverse=True)
     return {"jobs": [j.to_dict() for j in jobs[:20]]}
+
+
+# ------------------------------------------------------------------ 在线播放
+
+
+class PlayBody(TrackBody):
+    quality: str = "320"
+
+
+@app.post("/api/play/prepare")
+async def play_prepare(body: PlayBody) -> dict[str, Any]:
+    """解析出可播放的直链，返回一个短令牌给 <audio> 用。"""
+    _check_quality(body.quality)
+    if body.provider not in state.registry.providers:
+        raise HTTPException(status_code=400, detail=f"不支持的平台: {body.provider}")
+    track = await _enrich(body.to_track())
+    try:
+        entry = await state.play.prepare(track, body.quality)
+    except StreamUnavailable as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except PROVIDER_ERRORS as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        log.exception("播放解析失败")
+        raise HTTPException(status_code=502, detail=f"播放解析失败: {exc}") from exc
+    return entry.to_dict()
+
+
+@app.get("/api/play/{token}")
+async def play_stream(token: str, request: Request) -> Response:
+    """把上游音频流代理给浏览器，支持 Range（拖动进度条）。"""
+    entry = state.play.get(token)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="播放令牌已过期，请重新点击播放")
+    return await proxy(state.http, entry, request.headers.get("range", ""), request.method)
 
 
 # ------------------------------------------------------------------ 本地文件
@@ -590,6 +677,14 @@ if WEB_DIR.is_dir():
     @app.get("/account.css")
     async def account_css() -> FileResponse:
         return FileResponse(WEB_DIR / "account.css", media_type="text/css")
+
+    @app.get("/player.js")
+    async def player_js() -> FileResponse:
+        return FileResponse(WEB_DIR / "player.js", media_type="text/javascript")
+
+    @app.get("/player.css")
+    async def player_css() -> FileResponse:
+        return FileResponse(WEB_DIR / "player.css", media_type="text/css")
 
     @app.get("/favicon.ico")
     async def favicon() -> Response:

@@ -36,3 +36,5 @@ worker/node_modules/
 
 # 临时调试产物
 tmp_*
+MusicDL/
+shots/

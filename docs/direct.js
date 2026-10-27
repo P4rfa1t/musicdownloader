@@ -257,8 +257,9 @@
   }
 
   function searchKuwo(keyword, limit) {
+    // 必须用 https：Pages 是 https，加载 http 脚本会被当混合内容拦掉
     var url =
-      'http://search.kuwo.cn/r.s?all=' +
+      'https://search.kuwo.cn/r.s?all=' +
       encodeURIComponent(keyword) +
       '&ft=music&itemset=web_2013&client=kt&pn=0&rn=' +
       limit +

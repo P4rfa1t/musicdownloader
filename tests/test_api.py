@@ -210,3 +210,60 @@ async def test_file_traversal_blocked(client: AsyncClient) -> None:
     async with client as c:
         r = await c.get("/api/file", params={"path": "../../../windows/win.ini"})
     assert r.status_code in (403, 404)
+
+
+async def test_cors_allows_github_pages(client: AsyncClient) -> None:
+    """Pages 上的静态前端要跨域调后端，预检必须放行。"""
+    async with client as c:
+        r = await c.options(
+            "/api/search",
+            headers={
+                "Origin": "https://p4rfa1t.github.io",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+    assert r.status_code == 200
+    assert r.headers.get("access-control-allow-origin") == "https://p4rfa1t.github.io"
+
+
+async def test_cors_allows_any_github_io_subdomain(client: AsyncClient) -> None:
+    async with client as c:
+        r = await c.get("/api/health", headers={"Origin": "https://someone.github.io"})
+    assert r.headers.get("access-control-allow-origin") == "https://someone.github.io"
+
+
+async def test_cors_rejects_foreign_origin(client: AsyncClient) -> None:
+    async with client as c:
+        r = await c.get("/api/health", headers={"Origin": "https://evil.example.com"})
+    # 允许列表外的来源不返回 ACAO 头，浏览器会拦下
+    assert "access-control-allow-origin" not in r.headers
+
+
+async def test_root_serves_frontend(client: AsyncClient) -> None:
+    """前端用相对路径引用资源，根路径必须能直接提供。"""
+    async with client as c:
+        index = await c.get("/")
+        css = await c.get("/app.css")
+        js = await c.get("/app.js")
+    assert index.status_code == 200
+    assert "text/html" in index.headers["content-type"]
+    assert 'href="./app.css"' in index.text
+    assert 'src="./app.js"' in index.text
+    assert css.status_code == 200
+    assert "text/css" in css.headers["content-type"]
+    assert js.status_code == 200
+    assert "javascript" in js.headers["content-type"]
+
+
+async def test_static_prefix_still_works(client: AsyncClient) -> None:
+    """老的 /static/ 路径保留，避免旧书签失效。"""
+    async with client as c:
+        r = await c.get("/static/app.js")
+    assert r.status_code == 200
+
+
+async def test_cors_allows_local_static_preview(client: AsyncClient) -> None:
+    """本地起静态服务器预览 Pages 产物时，跨域也要放行。"""
+    async with client as c:
+        r = await c.get("/api/health", headers={"Origin": "http://127.0.0.1:8811"})
+    assert r.headers.get("access-control-allow-origin") == "http://127.0.0.1:8811"

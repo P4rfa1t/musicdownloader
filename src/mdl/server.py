@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .config import settings
+from .config import cors_origins, settings
 from .downloader import Downloader, JobManager
 from .http import Http, HttpError
 from .models import QUALITIES, Track
@@ -60,6 +61,22 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MusicDL", version=__version__, lifespan=lifespan)
+
+# GitHub Pages 上的静态前端要跨域调这里，所以放开 CORS。
+# 只影响浏览器读响应的权限，不涉及鉴权（本项目本身是本地单用户工具）。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins(),
+    # 任意 github.io 子域（含项目页）+ 本机任意端口的静态预览
+    allow_origin_regex=(
+        r"https://[a-zA-Z0-9-]+\.github\.io"
+        r"|https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?"
+    ),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["Content-Disposition", "Content-Length"],
+)
 
 
 # ------------------------------------------------------------------ 请求体
@@ -263,11 +280,36 @@ async def _stream_unavailable(_request, exc: StreamUnavailable) -> JSONResponse:
 
 
 if WEB_DIR.is_dir():
+    # 前端用相对路径引用资源（./app.css、./app.js），这样同一份文件既能挂在
+    # 本服务的根路径，也能直接丢给 GitHub Pages 的子路径托管。
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
     @app.get("/")
     async def index() -> FileResponse:
-        return FileResponse(WEB_DIR / "index.html")
+        return FileResponse(WEB_DIR / "index.html", media_type="text/html")
+
+    @app.get("/index.html")
+    async def index_html() -> FileResponse:
+        return FileResponse(WEB_DIR / "index.html", media_type="text/html")
+
+    @app.get("/app.css")
+    async def app_css() -> FileResponse:
+        return FileResponse(WEB_DIR / "app.css", media_type="text/css")
+
+    @app.get("/app.js")
+    async def app_js() -> FileResponse:
+        return FileResponse(WEB_DIR / "app.js", media_type="text/javascript")
+
+    @app.get("/favicon.ico")
+    async def favicon() -> Response:
+        # 内联一个音符图标，省得浏览器每开一次就 404 一条
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+            'stroke="#7c9cff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<path d="M9 17.4V6.2l9-1.9v11.2"/><circle cx="6.6" cy="17.6" r="2.4"/>'
+            '<circle cx="15.6" cy="15.5" r="2.4"/></svg>'
+        )
+        return Response(content=svg, media_type="image/svg+xml")
 
 
 def run(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> None:

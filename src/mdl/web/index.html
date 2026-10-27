@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>MusicDL · 本地音乐下载器</title>
-  <link rel="stylesheet" href="/static/app.css" />
+  <!-- 相对路径：GitHub Pages 部署在 /musicdownloader/ 子路径下，绝对路径会 404 -->
+  <link rel="stylesheet" href="./app.css" />
 </head>
 <body>
   <div class="app">
@@ -25,6 +26,10 @@
       <div class="providers" id="providers" aria-label="平台状态"></div>
 
       <div class="topbar-right">
+        <button class="ghost-btn settings-btn" id="settingsBtn" type="button" aria-haspopup="dialog">
+          <span class="gear" aria-hidden="true">⚙</span>
+          <span class="settings-label">设置</span>
+        </button>
         <button class="ghost-btn jobs-toggle" id="jobsToggle" type="button">任务面板</button>
       </div>
     </header>
@@ -77,6 +82,9 @@
           </div>
           <h2 id="emptyTitle">还没有内容</h2>
           <p id="emptyText">在上方搜索一首歌，或粘贴一条网易云 / QQ音乐的歌单链接开始。</p>
+          <div class="empty-actions" id="emptyActions" hidden>
+            <button class="primary-btn" id="emptyConnectBtn" type="button">配置后端地址</button>
+          </div>
         </section>
       </main>
 
@@ -90,9 +98,39 @@
     </div>
   </div>
 
+  <!-- 后端地址设置 -->
+  <div class="modal" id="settingsModal" hidden role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="settingsTitle">后端地址</h2>
+        <button class="icon-btn modal-close" id="settingsClose" type="button" aria-label="关闭">×</button>
+      </div>
+
+      <div class="modal-body">
+        <label class="field-label" for="apiBaseInput">API Base</label>
+        <input id="apiBaseInput" class="text-input" type="text" spellcheck="false"
+               autocomplete="off" placeholder="http://127.0.0.1:8000" />
+        <p class="field-hint">留空表示同源（本地跑 <code>mdl serve</code> 时用这个）。</p>
+
+        <div class="conn-result" id="connResult" hidden></div>
+
+        <p class="modal-note">
+          GitHub Pages 版没有后端，需要一个地址。两种方式：① 本地跑 <code>mdl serve</code> 并允许跨域；② 部署 Cloudflare Worker 中继（见 README）。
+        </p>
+      </div>
+
+      <div class="modal-actions">
+        <button class="ghost-btn" id="apiTestBtn" type="button">测试连接</button>
+        <span class="modal-spacer"></span>
+        <button class="ghost-btn danger" id="apiClearBtn" type="button">清除</button>
+        <button class="primary-btn" id="apiSaveBtn" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
   <div class="backdrop" id="backdrop" hidden></div>
   <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
-  <script src="/static/app.js"></script>
+  <script src="./app.js"></script>
 </body>
 </html>

@@ -68,3 +68,24 @@ class Settings:
 
 
 settings = Settings()
+
+
+def cors_origins() -> list[str]:
+    """允许跨域的前端来源。
+
+    GitHub Pages 上的静态前端需要一个后端地址，浏览器会带 Origin 过来，
+    所以默认放开 Pages 域名和本地开发端口。用 MDL_CORS_ORIGINS 覆盖，
+    逗号分隔，或设为 "*" 允许任意来源。
+    """
+    raw = _env("MDL_CORS_ORIGINS")
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return [
+        "https://p4rfa1t.github.io",
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8765",
+        "http://localhost:8765",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]

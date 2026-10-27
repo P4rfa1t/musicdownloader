@@ -38,6 +38,13 @@
   var SEARCH_LIMIT = 20;
   var POLL_INTERVAL = 1000;
 
+  // 后端地址持久化 key
+  var STORAGE_KEY = 'mdl_api_base';
+
+  // 当前 API Base。'' 表示同源（本地 mdl serve）。
+  // 优先级：?api= → localStorage → window.MDL_API_BASE → ''
+  var API_BASE = '';
+
   var KIND_LABEL = {
     song: '单曲',
     playlist: '歌单',
@@ -111,7 +118,7 @@
   }
 
   function fileUrl(path) {
-    return '/api/file?path=' + encodeURIComponent(path || '');
+    return apiUrl('/api/file?path=' + encodeURIComponent(path || ''));
   }
 
   function humanSize(bytes) {
@@ -152,6 +159,70 @@
     setTimeout(dismiss, ttl);
   }
 
+  /* ------------------------------ API Base ------------------------------ */
+
+  // 归一化：去首尾空白、去掉尾部所有 '/'。空字符串保持为空（= 同源）。
+  function normalizeBase(value) {
+    var v = String(value === undefined || value === null ? '' : value).trim();
+    if (!v) return '';
+    v = v.replace(/\/+$/, '');
+    return v;
+  }
+
+  // 只接受 http(s) 或协议相对的绝对地址；其它（含裸域名）一律视为无效，避免拼出怪 URL
+  function isUsableBase(value) {
+    var v = normalizeBase(value);
+    if (!v) return true; // 空 = 同源，合法
+    return /^https?:\/\/[^\s]+$/i.test(v) || /^\/\//.test(v);
+  }
+
+  function readStoredBase() {
+    try {
+      var raw = window.localStorage.getItem(STORAGE_KEY);
+      return raw === null ? null : normalizeBase(raw);
+    } catch (e) {
+      return null; // 隐私模式 / 禁用 storage
+    }
+  }
+
+  function writeStoredBase(value) {
+    try {
+      var v = normalizeBase(value);
+      if (v) window.localStorage.setItem(STORAGE_KEY, v);
+      else window.localStorage.removeItem(STORAGE_KEY);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // 计算初始 API_BASE（不含 ?api=，那个在深链接阶段处理并落盘）
+  function resolveInitialBase() {
+    var stored = readStoredBase();
+    if (stored) return stored;
+    var injected = '';
+    try {
+      injected = normalizeBase(window.MDL_API_BASE || '');
+    } catch (e) {
+      injected = '';
+    }
+    if (injected) return injected;
+    return '';
+  }
+
+  function setApiBase(value) {
+    API_BASE = normalizeBase(value);
+    return API_BASE;
+  }
+
+  // 把相对 API 路径拼到当前 base 上
+  function apiUrl(path) {
+    var p = String(path || '');
+    if (!API_BASE) return p;
+    if (!p) return API_BASE;
+    return API_BASE + (p.charAt(0) === '/' ? p : '/' + p);
+  }
+
   /* ------------------------------ HTTP ------------------------------ */
 
   function api(path, options) {
@@ -167,7 +238,7 @@
     }
     if (opts.signal) init.signal = opts.signal;
 
-    return fetch(path, init).then(function (res) {
+    return fetch(apiUrl(path), init).then(function (res) {
       return res.text().then(function (text) {
         var data = null;
         if (text) {
@@ -264,11 +335,15 @@
 
   function loadHealth() {
     renderProviderSkeleton();
-    api('/api/health').then(function (data) {
+    return api('/api/health').then(function (data) {
       applyHealth(data);
+      hideConnectGuide();
+      return data;
     }).catch(function (err) {
       applyHealth({ providers: [] });
       toast('无法连接后端服务：' + err.message, 'error');
+      showConnectGuide(err);
+      return null;
     });
   }
 
@@ -339,12 +414,36 @@
     if (!empty) return;
     $('emptyTitle').textContent = title;
     $('emptyText').textContent = text;
+    var actions = $('emptyActions');
+    if (actions) actions.hidden = true;
     empty.hidden = false;
   }
 
   function hideEmpty() {
     var empty = $('empty');
     if (empty) empty.hidden = true;
+  }
+
+  // 未连接后端的引导：只在没有结果可看时占据 #empty 区域
+  function showConnectGuide(err) {
+    var results = $('results');
+    var hasResults = !!(results && results.childNodes && results.childNodes.length);
+    var actions = $('emptyActions');
+    if (actions) actions.hidden = false;
+
+    if (hasResults) return; // 已有内容就不打断，toast 已经提示过了
+
+    var empty = $('empty');
+    if (!empty) return;
+    $('emptyTitle').textContent = '未连接后端';
+    $('emptyText').textContent = '这个页面需要连到一个 MusicDL 后端才能搜索和下载。' +
+      (err && err.message ? '（' + err.message + '）' : '');
+    empty.hidden = false;
+  }
+
+  function hideConnectGuide() {
+    var actions = $('emptyActions');
+    if (actions) actions.hidden = true;
   }
 
   function clearResults() {
@@ -773,9 +872,11 @@
       btn.textContent = btn.dataset.orig || '全部下载';
     }
 
+    var q = quality || DEFAULT_QUALITY;
+
     api('/api/download/batch', {
       method: 'POST',
-      body: { quality: quality || DEFAULT_QUALITY, tracks: list }
+      body: { quality: q, tracks: list }
     }).then(function (res) {
       var jobId = res && res.job_id;
       if (!jobId) throw new Error('后端没有返回 job_id');
@@ -785,7 +886,124 @@
       openJobsPanel();
     }).catch(function (err) {
       restoreBtn();
+      // 中继（Cloudflare Worker / 静态托管）通常没有批量接口：501/404/405 直接降级为前端串行
+      if (isBatchUnsupported(err)) {
+        toast('批量接口不可用，改为逐首下载（' + list.length + ' 首）', 'warn');
+        runSerialBatch(list, q);
+        return;
+      }
       toast('批量下载失败：' + err.message, 'error');
+    });
+  }
+
+  // 判定「后端没有批量能力」：状态码 404/405/501，或 400 且消息里明确提到不支持
+  function isBatchUnsupported(err) {
+    if (!err) return false;
+    var s = Number(err.status) || 0;
+    if (s === 501 || s === 404 || s === 405) return true;
+    if (s === 400) {
+      var m = String(err.message || '');
+      return /not\s*supported|unsupported|not\s*implemented|不支持|未实现/i.test(m);
+    }
+    return false;
+  }
+
+  /* --------- 前端串行降级：本地合成一个 job，逐首调 /api/download --------- */
+
+  function makeLocalJob(list, quality) {
+    var now = Date.now();
+    var id = 'local-' + now;
+    var items = list.map(function (t) {
+      return {
+        title: t.title || '未命名',
+        provider: t.provider || '',
+        state: 'pending',
+        file: '',
+        path: '',
+        error: '',
+        size: 0,
+        _track: t
+      };
+    });
+    var job = {
+      id: id,
+      state: 'running',
+      total: items.length,
+      finished: 0,
+      ok: 0,
+      failed: 0,
+      current: '准备中…',
+      items: items,
+      created_at: Math.floor(now / 1000),
+      _seq: (state.seq += 1),
+      _local: true,
+      _quality: quality || DEFAULT_QUALITY,
+      _index: 0
+    };
+    state.jobs[id] = job;
+    return job;
+  }
+
+  function runSerialBatch(list, quality) {
+    var job = makeLocalJob(list, quality);
+    renderJobs();
+    openJobsPanel();
+    stepSerialJob(job);
+  }
+
+  function stepSerialJob(job) {
+    if (!job || job._cancelled) return;
+    var idx = job._index;
+
+    if (idx >= job.items.length) {
+      job.state = job.failed > 0 ? (job.ok > 0 ? 'done' : 'failed') : 'done';
+      job.current = job.state === 'done' ? '已完成' : '全部失败';
+      renderJobs();
+      if (job.failed > 0 && job.ok > 0) {
+        toast('逐首下载完成：成功 ' + job.ok + '，失败 ' + job.failed, 'warn');
+      } else if (job.ok > 0) {
+        toast('逐首下载完成：' + job.ok + ' 首', 'ok');
+      } else {
+        toast('逐首下载全部失败', 'error');
+      }
+      return;
+    }
+
+    var item = job.items[idx];
+    var track = item._track || {};
+    item.state = 'running';
+    job.current = '正在下载 ' + (item.title || '');
+    renderJobs();
+
+    api('/api/download', {
+      method: 'POST',
+      body: {
+        provider: track.provider || '',
+        id: String(track.id),
+        quality: job._quality,
+        title: track.title || '',
+        artists: Array.isArray(track.artists) ? track.artists : [],
+        album: track.album || '',
+        cover_url: track.cover_url || '',
+        duration_ms: Number(track.duration_ms) || 0
+      }
+    }).then(function (res) {
+      item.state = 'done';
+      item.file = (res && res.file) || '';
+      item.path = (res && res.path) || '';
+      item.size = Number(res && res.size) || 0;
+      item.error = '';
+      job.ok += 1;
+    }).catch(function (err) {
+      item.state = 'failed';
+      item.error = (err && err.message) || '下载失败';
+      job.failed += 1;
+    }).then(function () {
+      job.finished += 1;
+      job._index = idx + 1;
+      renderJobs();
+      // 让出主线程，避免长列表把 UI 卡死
+      window.setTimeout(function () { stepSerialJob(job); }, 0);
     });
   }
 
@@ -1012,6 +1230,135 @@
     if (backdrop) backdrop.hidden = true;
   }
 
+  /* ------------------------------ 后端地址设置 ------------------------------ */
+
+  function baseLabel(value) {
+    var v = normalizeBase(value);
+    return v || '同源';
+  }
+
+  function openSettings() {
+    var modal = $('settingsModal');
+    if (!modal) return;
+    var input = $('apiBaseInput');
+    if (input) input.value = API_BASE || '';
+    setConnResult(null);
+    modal.hidden = false;
+    document.body.classList.add('modal-open');
+    if (input) {
+      window.setTimeout(function () { input.focus(); input.select(); }, 20);
+    }
+  }
+
+  function closeSettings() {
+    var modal = $('settingsModal');
+    if (modal) modal.hidden = true;
+    document.body.classList.remove('modal-open');
+  }
+
+  function isSettingsOpen() {
+    var modal = $('settingsModal');
+    return !!(modal && !modal.hidden);
+  }
+
+  // kind: null 清空 / 'ok' 成功 / 'error' 失败 / 'busy' 检测中
+  function setConnResult(kind, text) {
+    var box = $('connResult');
+    if (!box) return;
+    if (!kind) {
+      box.hidden = true;
+      box.textContent = '';
+      box.className = 'conn-result';
+      return;
+    }
+    box.hidden = false;
+    box.className = 'conn-result is-' + kind;
+    box.textContent = text || '';
+  }
+
+  // 读输入框当前值（未保存），用于「测试连接」
+  function pendingBase() {
+    var input = $('apiBaseInput');
+    return normalizeBase(input ? input.value : '');
+  }
+
+  function testConnection() {
+    var base = pendingBase();
+    if (!isUsableBase(base)) {
+      setConnResult('error', '地址格式不对，要以 http:// 或 https:// 开头');
+      return;
+    }
+
+    var btn = $('apiTestBtn');
+    if (btn) {
+      btn.disabled = true;
+      btn.dataset.orig = btn.dataset.orig || btn.textContent;
+      btn.textContent = '测试中…';
+    }
+    setConnResult('busy', '正在连接 ' + baseLabel(base) + ' …');
+
+    // 这里必须用待保存的 base 而不是当前 API_BASE
+    var url = (base ? base : '') + '/api/health';
+    fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+      .then(function (res) {
+        return res.text().then(function (text) {
+          var data = null;
+          if (text) {
+            try { data = JSON.parse(text); } catch (e) { data = null; }
+          }
+          if (!res.ok) {
+            var msg = (data && data.detail) ? String(data.detail) : ('HTTP ' + res.status);
+            throw new Error(msg);
+          }
+          if (!data) throw new Error('返回的不是 JSON');
+          return data;
+        });
+      })
+      .then(function (data) {
+        var provs = Array.isArray(data.providers) ? data.providers.length : 0;
+        var ver = data.version ? 'v' + data.version : '版本未知';
+        setConnResult('ok', '已连接 · ' + ver + ' · ' + provs + ' 个平台');
+      })
+      .catch(function (err) {
+        var msg = (err && err.message) ? err.message : '连接失败';
+        if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+          msg = '请求被拒绝（网络不通或后端未允许跨域）';
+        }
+        setConnResult('error', msg);
+      })
+      .then(function () {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = btn.dataset.orig || '测试连接';
+        }
+      });
+  }
+
+  function saveApiBase() {
+    var base = pendingBase();
+    if (!isUsableBase(base)) {
+      setConnResult('error', '地址格式不对，要以 http:// 或 https:// 开头');
+      return;
+    }
+    var ok = writeStoredBase(base);
+    setApiBase(base);
+    if (!ok) toast('浏览器不允许保存配置，本次会话内仍然有效', 'warn');
+    toast('后端地址已设为 ' + baseLabel(base), 'ok');
+    closeSettings();
+    hideConnectGuide();
+    loadHealth();
+  }
+
+  function clearApiBase() {
+    writeStoredBase('');
+    setApiBase('');
+    var input = $('apiBaseInput');
+    if (input) input.value = '';
+    setConnResult(null);
+    toast('已清除后端地址，回到同源模式', 'ok');
+    loadHealth();
+  }
+
   /* ------------------------------ 搜索 / 解析 ------------------------------ */
 
   function setBusy(busy) {
@@ -1152,8 +1499,51 @@
     var backdrop = $('backdrop');
     if (backdrop) backdrop.addEventListener('click', closeJobsPanel);
 
+    // --- 后端地址设置 ---
+    var settingsBtn = $('settingsBtn');
+    if (settingsBtn) settingsBtn.addEventListener('click', openSettings);
+
+    var emptyConnect = $('emptyConnectBtn');
+    if (emptyConnect) emptyConnect.addEventListener('click', openSettings);
+
+    var settingsClose = $('settingsClose');
+    if (settingsClose) settingsClose.addEventListener('click', closeSettings);
+
+    var modal = $('settingsModal');
+    if (modal) {
+      modal.addEventListener('click', function (e) {
+        if (e.target === modal) closeSettings();
+      });
+    }
+
+    var apiTest = $('apiTestBtn');
+    if (apiTest) apiTest.addEventListener('click', testConnection);
+
+    var apiSave = $('apiSaveBtn');
+    if (apiSave) apiSave.addEventListener('click', saveApiBase);
+
+    var apiClear = $('apiClearBtn');
+    if (apiClear) apiClear.addEventListener('click', clearApiBase);
+
+    var apiInput = $('apiBaseInput');
+    if (apiInput) {
+      apiInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          saveApiBase();
+        }
+      });
+      apiInput.addEventListener('input', function () {
+        setConnResult(null);
+      });
+    }
+
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
+        if (isSettingsOpen()) {
+          closeSettings();
+          return;
+        }
         closeJobsPanel();
         return;
       }
@@ -1184,52 +1574,81 @@
 
   /* ------------------------------ 深链接 ------------------------------ */
 
-  // 支持 ?q=<关键词> 与 ?url=<分享链接>，加载后自动执行一次。
-  // 执行完立刻用 replaceState 把 query 清掉：刷新不会重复触发，也不会留下脏 URL。
+  // 解析 ?api= / ?q= / ?url= / ?provider=。
+  // ?api= 会先写入 localStorage 并切到新的 API_BASE，然后才清 query，
+  // 这样刷新不会重放、也不会丢配置。返回本次要执行的动作（可能为空）。
   function consumeDeepLink() {
+    var intent = { q: '', url: '', provider: '' };
     var loc = window.location;
-    if (!loc || !loc.search) return false;
+    if (!loc || !loc.search) return intent;
 
     var params;
     try {
       params = new URLSearchParams(loc.search);
     } catch (e) {
-      return false;
+      return intent;
     }
 
+    var rawApi = (params.get('api') || '').trim();
     var rawUrl = (params.get('url') || '').trim();
     var rawQ = (params.get('q') || '').trim();
-    if (!rawUrl && !rawQ) return false;
+    var rawProvider = (params.get('provider') || '').trim();
 
-    var input = $('q');
-    var provSel = $('provider');
-    var provParam = (params.get('provider') || '').trim();
+    if (!rawApi && !rawUrl && !rawQ) return intent;
 
-    // 先清 URL，再发请求：即使请求失败也不会在刷新时重放
+    // 1) 先持久化 API base（即使后面清 URL 失败也已经生效）
+    if (rawApi) {
+      if (isUsableBase(rawApi)) {
+        var normalized = normalizeBase(rawApi);
+        var saved = writeStoredBase(normalized);
+        setApiBase(normalized);
+        if (!saved) toast('浏览器不允许保存配置，本次会话内仍然有效', 'warn');
+        toast('后端地址已设为 ' + baseLabel(normalized), 'ok');
+      } else {
+        toast('?api= 参数格式不对，已忽略', 'error');
+      }
+    }
+
+    // 2) 清 query：刷新不会重复触发
     try {
       var clean = loc.pathname + (loc.hash || '');
       window.history.replaceState(null, '', clean);
     } catch (e) { /* file:// 或沙箱下可能受限，忽略 */ }
 
+    // 3) 记录要执行的动作，由 init 在健康检查之后触发
     if (rawUrl) {
-      if (input) input.value = rawUrl;
-      syncModeChip();
-      runResolve(rawUrl);
-      return true;
+      intent.url = rawUrl;
+    } else if (rawQ) {
+      intent.q = rawQ;
+      intent.provider = rawProvider;
     }
+    return intent;
+  }
 
-    if (provParam && provSel) {
+  function applyDeepLinkIntent(intent) {
+    if (!intent) return;
+    var input = $('q');
+    var provSel = $('provider');
+
+    if (intent.url) {
+      if (input) input.value = intent.url;
+      syncModeChip();
+      runResolve(intent.url);
+      return;
+    }
+    if (!intent.q) return;
+
+    if (intent.provider && provSel) {
       var known = false;
       for (var i = 0; i < provSel.options.length; i++) {
-        if (provSel.options[i].value === provParam) { known = true; break; }
+        if (provSel.options[i].value === intent.provider) { known = true; break; }
       }
-      if (known) provSel.value = provParam;
+      if (known) provSel.value = intent.provider;
     }
 
-    if (input) input.value = rawQ;
+    if (input) input.value = intent.q;
     syncModeChip();
-    runSearch(rawQ, provSel ? provSel.value : 'all');
-    return true;
+    runSearch(intent.q, provSel ? provSel.value : 'all');
   }
 
   /* ------------------------------ 启动 ------------------------------ */
@@ -1238,15 +1657,21 @@
     bindEvents();
     syncModeChip();
     renderJobs();
+
+    // API base 必须在任何请求之前定下来：localStorage / window.MDL_API_BASE
+    setApiBase(resolveInitialBase());
+
+    // ?api= 会覆盖上面的结果并落盘；同时取出 ?q= / ?url= 的待执行动作
+    var intent = consumeDeepLink();
+
+    // 健康检查（用最终的 base）
     loadHealth();
 
     var input = $('q');
-    if (input) {
-      input.focus();
-    }
+    if (input) input.focus();
 
-    // 深链接放在最后：DOM 与事件都已就绪
-    consumeDeepLink();
+    // 深链接的搜索/解析放在健康检查之后，避免两批请求互相 abort
+    applyDeepLinkIntent(intent);
   }
 
   if (document.readyState === 'loading') {

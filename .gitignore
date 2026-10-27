@@ -25,3 +25,9 @@ config.local.json
 
 # pytest 临时目录
 pytest-of-*/
+
+# Pages 产物由 CI 生成，但仍提交以便直接开 Pages
+# （如需改成纯 CI 构建，取消下面一行注释）
+# docs/
+worker/node_modules/
+.wrangler/
